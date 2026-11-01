@@ -1,0 +1,17 @@
+# Windows client
+windows/.venv/
+__pycache__/
+*.py[cod]
+
+# Android client
+android/.gradle/
+android/build/
+android/app/build/
+# Machine-specific SDK path. The comment is on its own line because git reads a trailing one as
+# part of the pattern, which silently stops it matching.
+android/local.properties
+*.iml
+.idea/
+
+# Nothing here holds a pairing token: the Windows client keeps its config in
+# %APPDATA%\CaptureKVM and the Android one in app-private shared preferences.

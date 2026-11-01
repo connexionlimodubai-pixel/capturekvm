@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB class 14 (0x0E) is Video. Every UVC HDMI grabber reports it, so one line covers the
+         MS2109 and MS2130 cards this app is for and anything else of the kind. -->
+    <usb-device class="14" />
+</resources>

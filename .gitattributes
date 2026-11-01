@@ -1,0 +1,15 @@
+# Normalise line endings in the repository, so a checkout on Windows and one on Linux agree.
+* text=auto
+
+# gradlew is run by /bin/sh on macOS and Linux: with CRLF it fails with "bad interpreter".
+gradlew text eol=lf
+*.sh text eol=lf
+
+# PowerShell is happiest with CRLF.
+*.ps1 text eol=crlf
+
+# Not text.
+*.jar binary
+*.apk binary
+*.png binary
+*.ico binary

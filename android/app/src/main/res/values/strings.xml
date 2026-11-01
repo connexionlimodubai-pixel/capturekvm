@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CaptureKVM</string>
+
+    <string name="pair">Pair</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="keyboard">Keyboard</string>
+    <string name="mode_touch">Touchpad</string>
+    <string name="mode_pad">Gamepad</string>
+
+    <string name="pair_title">Pair with a PC</string>
+    <string name="pair_hint">On the PC: open Beamer, choose Pair, and read off the six digits. The code lasts one minute and works once.</string>
+    <string name="pair_address">PC address</string>
+    <string name="pair_code">Pairing code</string>
+
+    <string name="no_card">Plug the capture card in</string>
+    <string name="no_peer">Not paired with any PC</string>
+    <string name="waiting_signal">Waiting for a picture from the card</string>
+</resources>

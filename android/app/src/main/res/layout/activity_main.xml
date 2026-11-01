@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <com.serenegiant.widget.AspectRatioSurfaceView
+        android:id="@+id/preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+    <!-- Sits over the picture and turns touches into relative mouse movement. -->
+    <com.capturekvm.ui.TouchpadView
+        android:id="@+id/touchpad"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Off-screen and one pixel: it exists only to hold focus so the soft keyboard opens and
+         its key events reach the activity. -->
+    <EditText
+        android:id="@+id/keyboardSink"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:alpha="0"
+        android:importantForAutofill="no"
+        android:inputType="textNoSuggestions|textVisiblePassword"
+        android:background="@null"
+        android:cursorVisible="false"
+        android:autofillHints=""
+        android:contentDescription="@string/keyboard" />
+
+    <LinearLayout
+        android:id="@+id/bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#B0000000"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="6dp">
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="2"
+            android:textColor="#E0F2F1"
+            android:textSize="12sp"
+            android:text="@string/no_card" />
+
+        <Button
+            android:id="@+id/pairButton"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#5BD1C7"
+            android:textSize="12sp"
+            android:text="@string/pair" />
+
+        <Button
+            android:id="@+id/linkButton"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#5BD1C7"
+            android:textSize="12sp"
+            android:text="@string/connect" />
+
+        <Button
+            android:id="@+id/modeButton"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#5BD1C7"
+            android:textSize="12sp"
+            android:text="@string/mode_touch" />
+
+        <Button
+            android:id="@+id/keyboardButton"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#5BD1C7"
+            android:textSize="12sp"
+            android:text="@string/keyboard" />
+    </LinearLayout>
+</FrameLayout>

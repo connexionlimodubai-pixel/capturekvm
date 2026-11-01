@@ -1,0 +1,13 @@
+# The window. LGPL-3.0, used as shared libraries the user can replace.
+PySide6-Essentials>=6.8
+
+# X25519 and ChaCha20-Poly1305, via libsodium. The vendored Beamer core imports it directly, so
+# this is the same dependency upstream has.
+PyNaCl>=1.5
+
+# UVC capture through Media Foundation. The MSMF back end is what opens a capture card by index.
+opencv-python>=4.10
+numpy>=2.0
+
+# Renders a pairing QR. Optional today; kept so the pairing dialog can show one later.
+segno>=1.6
