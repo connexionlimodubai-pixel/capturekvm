@@ -2,18 +2,23 @@
 
 ## CaptureKVM is GPL-3.0, and has to be
 
-`third_party/beamer/core/` is a verbatim copy of four modules from
+`beamer-vigem/` is a git subtree of a fork of
 [kalkman-code/beamer](https://github.com/kalkman-code/beamer), which is **GPL-3.0-or-later**:
+
+The whole of Beamer is in there, upstream's history included, plus this project's own gamepad
+capability on top (`beamer-vigem/FORK.md` lists exactly what was added). The parts the client
+leans on are:
 
 | File | What it is |
 |---|---|
 | `core/protocol.py` | wire version 6: the handshake, the keys, the frames, every message builder and validator |
 | `core/pairing.py` | the CPace pairing exchange |
 | `core/keytable.py` | WIRE.md section 7's key names and the cross-family modifier mapping |
-| `core/__init__.py` | the package |
+| `core/gamepad.py` | the pad messages — this project's addition, not upstream's |
+| `core/receiver.py` | the responder; the client's end-to-end check runs the real one |
 
-- Upstream version: see `third_party/beamer/BEAMER_VERSION`
-- Upstream commit: see `third_party/beamer/BEAMER_COMMIT`
+- Upstream version: see `beamer-vigem/VERSION`
+- The subtree keeps its own git history, so `git log -- beamer-vigem` shows exactly what came from where.
 - `LICENSE` in this repository is upstream's GPL-3.0 text.
 
 The Windows app imports that package directly, so it is a derivative work and this whole project

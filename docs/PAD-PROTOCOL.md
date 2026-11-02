@@ -2,13 +2,13 @@
 
 Upstream Beamer's wire version 6 has no gamepad. This file is the contract CaptureKVM speaks.
 
-**The matching PC side is `../../beamer-vigem/`**, a fork of Beamer in this workspace that
+**The matching PC side is `../beamer-vigem/`**, a fork of Beamer carried in this repo that
 implements it against ViGEmBus. Its own specification is
-[`beamer-vigem/docs/GAMEPAD.md`](../../beamer-vigem/docs/GAMEPAD.md), and the two are checked
+[`beamer-vigem/docs/GAMEPAD.md`](../beamer-vigem/docs/GAMEPAD.md), and the two are checked
 against each other over a real socket:
 
 ```bash
-python tools/interop_check.py
+python tools/end_to_end_check.py
 ```
 
 So this is no longer a proposal — it is what both ends do. If you ever point the client at a

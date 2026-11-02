@@ -4,16 +4,21 @@ The video never touches the network -- it arrives as UVC frames on the capture c
 this machine. Only keyboard and mouse travel, as Beamer wire version 6 frames to the PC running
 Beamer, so the picture's lag is the card's and the control's lag is one Wi-Fi hop.
 
-Importing this package puts the vendored Beamer core on sys.path; `third_party/beamer/core` is a
-verbatim copy of the upstream package (see ../../NOTICE.md) and everything on the wire is built by
-it rather than reimplemented here.
+Importing this package puts `beamer-vigem/` on sys.path, so everything on the wire is built by the
+same `core` package the PC runs, rather than by a copy of it. That is the point of keeping the two
+in one repository: a second copy of the protocol is a second thing to keep in step, and the two
+would drift silently -- a wrong byte in a key derivation does not raise, it just stops the link
+working with no clue as to why.
+
+`beamer-vigem/` is a git subtree of the Beamer fork (see ../../NOTICE.md), so it keeps its own
+history and can still merge upstream Beamer.
 """
 
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-BEAMER_ROOT = PROJECT_ROOT / "third_party" / "beamer"
+BEAMER_ROOT = PROJECT_ROOT / "beamer-vigem"
 
 if str(BEAMER_ROOT) not in sys.path:
     sys.path.insert(0, str(BEAMER_ROOT))

@@ -27,7 +27,7 @@ most — the picture — is wired.
 | | |
 |---|---|
 | **A UVC capture card** | Any HDMI-to-USB grabber. The ~$5 MS2109 class does 1080p30 (MJPEG); an MS2130 does 1080p60 over USB 3.0. Both report USB class 14, which is all this app looks for. |
-| **On the PC** | [`../beamer-vigem/`](../beamer-vigem) — Beamer with the gamepad capability this project needs. Install that rather than stock Beamer; [`FORK.md`](../beamer-vigem/FORK.md) is the three-step setup. Stock Beamer also works, without the pad. |
+| **On the PC** | [`beamer-vigem/`](beamer-vigem) in this repo — Beamer with the gamepad capability this project needs. Install that rather than stock Beamer; [`FORK.md`](beamer-vigem/FORK.md) is the three-step setup. Stock Beamer also works, without the pad. |
 | **A second HDMI output** on the PC (or a splitter) if you want to keep using its own monitor. |
 | **Windows client** | Python 3.11+ |
 | **Android client** | Android 8.0+ with USB host (OTG). Most tablets; check yours supports USB host. |
@@ -111,15 +111,15 @@ A pad plugged into the client appears on the PC as a virtual Xbox 360 controller
   `vigem_target_x360_update`.
 
 The pad messages are not part of upstream Beamer, so the PC side comes with this project:
-**[`../beamer-vigem/`](../beamer-vigem)** is a fork of Beamer that implements them against
+**[`beamer-vigem/`](beamer-vigem)** is a fork of Beamer, carried in this repo as a git subtree, that implements them against
 ViGEmBus. Install that on the PC instead of stock Beamer — see
-[`beamer-vigem/docs/GAMEPAD.md`](../beamer-vigem/docs/GAMEPAD.md).
+[`beamer-vigem/docs/GAMEPAD.md`](beamer-vigem/docs/GAMEPAD.md).
 
 The two halves are checked against each other over a real socket, so the contract is not a matter
 of hope:
 
 ```bash
-python tools/interop_check.py      # 9 checks: client <-> fork
+python tools/end_to_end_check.py   # 18 checks: client <-> the PC's real responder
 ```
 
 The client advertises `gamepad` in its `caps` and **sends no pad frame unless the PC advertises it
@@ -128,7 +128,7 @@ too**, so pointing it at a stock Beamer degrades to keyboard and mouse instead o
 
 ## How the link is built
 
-The keyboard and mouse path is not a reimplementation. `third_party/beamer/core/` is a verbatim
+The keyboard and mouse path is not a reimplementation. `beamer-vigem/core/` is a verbatim
 copy of upstream's `protocol.py`, `pairing.py` and `keytable.py`, and the Windows client imports
 it, so the handshake, the ChaCha20-Poly1305 framing, the CPace pairing and every validation rule
 are upstream's own code. **This makes the project GPL-3.0** — see [NOTICE.md](NOTICE.md).
@@ -149,7 +149,7 @@ all three tags. Re-run both after touching the vendored core.
 The Windows link is checked end to end against a responder built from the same vendored core:
 
 ```bash
-python tools/loopback_check.py
+python tools/end_to_end_check.py
 ```
 
 14 checks: the handshake, that `hello` declares port 0, that the focus takes the machine, that
@@ -193,10 +193,9 @@ capturekvm/
 ├── LICENSE                  GPL-3.0 (upstream Beamer's)
 ├── NOTICE.md                what is vendored, and why the licence is what it is
 ├── docs/PAD-PROTOCOL.md     the gamepad contract from the client's side
-├── third_party/beamer/      verbatim upstream core + the commit it came from
+├── beamer-vigem/            the PC's half, as a git subtree (its own history)
 ├── tools/make_vectors.py    generates the Kotlin test vectors from that core
-├── tools/loopback_check.py  the client's link against a responder built from that core
-├── tools/interop_check.py   the client against the fork, over a real socket
+├── tools/end_to_end_check.py  the client's link against the PC's real responder
 ├── windows/capturekvm/
 │   ├── capture.py           UVC capture through Media Foundation
 │   ├── link.py              the Beamer initiator

@@ -1,78 +1,66 @@
-"""The gamepad messages, which are not in upstream Beamer.
+"""The pad, as this client sends it.
 
-Upstream wire version 6 has no pad: `docs/PAD-PROTOCOL.md` states the contract this module speaks
-so a Beamer fork with a ViGEmBus target can answer it. Everything here is deliberately shaped
-like `XUSB_REPORT`, the struct ViGEmBus takes for an Xbox 360 target, so a responder can memcpy
-the fields straight into `vigem_target_x360_update` without rescaling anything.
+The messages themselves are `core.gamepad`'s -- the same module the PC's responder validates them
+with, now that `beamer-vigem/` is in this repository. This file used to carry its own copy of the
+builders; it does not any more, because two definitions of one wire format are two things to keep
+in step, and the symptom of their drifting apart is a controller that quietly does nothing.
 
-If a fork names its messages differently, this file is the only one to change: `link.py` calls
-`attach`, `detach` and `report` and knows nothing else about the pad.
+What is left here is the part that belongs to a sender: `PadState`, a mutable reading that a poller
+fills in place and compares against what it last sent. `core.gamepad` has no such thing, and
+should not -- a responder has no use for it.
 
-Upstream's `parse_message` ignores a type it does not know, so sending these to a stock Beamer is
-inert rather than fatal -- but an unacknowledged `seq` would stall the link's backlog, so
-`link.py` only numbers pad frames when the peer advertises CAP_GAMEPAD.
+`docs/PAD-PROTOCOL.md` is the contract; `beamer-vigem/docs/GAMEPAD.md` is the specification.
 """
 
-# Advertised in `caps` by both sides. A responder that does not offer it gets no pad frames.
-CAP_GAMEPAD = "gamepad"
+from core import gamepad
 
-MSG_GAMEPAD_ATTACH = "gamepad_attach"
-MSG_GAMEPAD_DETACH = "gamepad_detach"
-MSG_GAMEPAD = "gamepad"
+# Re-exported so callers say `padwire.BTN_A` and need not know which module defines it.
+CAP_GAMEPAD = gamepad.CAP_GAMEPAD
 
-# Pad kinds a responder may support. x360 is the one ViGEmBus emulates most faithfully.
-KIND_X360 = "x360"
-KIND_DS4 = "ds4"
-KINDS = (KIND_X360, KIND_DS4)
+MSG_GAMEPAD_ATTACH = gamepad.MSG_GAMEPAD_ATTACH
+MSG_GAMEPAD_DETACH = gamepad.MSG_GAMEPAD_DETACH
+MSG_GAMEPAD = gamepad.MSG_GAMEPAD
 
-MAX_PADS = 4
+KIND_X360 = gamepad.KIND_X360
+KIND_DS4 = gamepad.KIND_DS4
+KINDS = gamepad.KINDS
+MAX_PADS = gamepad.MAX_PADS
 
-# XINPUT_GAMEPAD / XUSB_BUTTON bits, unchanged from xinput.h so the two ends cannot drift.
-BTN_DPAD_UP = 0x0001
-BTN_DPAD_DOWN = 0x0002
-BTN_DPAD_LEFT = 0x0004
-BTN_DPAD_RIGHT = 0x0008
-BTN_START = 0x0010
-BTN_BACK = 0x0020
-BTN_LEFT_THUMB = 0x0040
-BTN_RIGHT_THUMB = 0x0080
-BTN_LEFT_SHOULDER = 0x0100
-BTN_RIGHT_SHOULDER = 0x0200
-BTN_GUIDE = 0x0400
-BTN_A = 0x1000
-BTN_B = 0x2000
-BTN_X = 0x4000
-BTN_Y = 0x8000
+BTN_DPAD_UP = gamepad.BTN_DPAD_UP
+BTN_DPAD_DOWN = gamepad.BTN_DPAD_DOWN
+BTN_DPAD_LEFT = gamepad.BTN_DPAD_LEFT
+BTN_DPAD_RIGHT = gamepad.BTN_DPAD_RIGHT
+BTN_START = gamepad.BTN_START
+BTN_BACK = gamepad.BTN_BACK
+BTN_LEFT_THUMB = gamepad.BTN_LEFT_THUMB
+BTN_RIGHT_THUMB = gamepad.BTN_RIGHT_THUMB
+BTN_LEFT_SHOULDER = gamepad.BTN_LEFT_SHOULDER
+BTN_RIGHT_SHOULDER = gamepad.BTN_RIGHT_SHOULDER
+BTN_GUIDE = gamepad.BTN_GUIDE
+BTN_A = gamepad.BTN_A
+BTN_B = gamepad.BTN_B
+BTN_X = gamepad.BTN_X
+BTN_Y = gamepad.BTN_Y
 
-BUTTON_NAMES = {
-    "dpad_up": BTN_DPAD_UP,
-    "dpad_down": BTN_DPAD_DOWN,
-    "dpad_left": BTN_DPAD_LEFT,
-    "dpad_right": BTN_DPAD_RIGHT,
-    "start": BTN_START,
-    "back": BTN_BACK,
-    "left_thumb": BTN_LEFT_THUMB,
-    "right_thumb": BTN_RIGHT_THUMB,
-    "left_shoulder": BTN_LEFT_SHOULDER,
-    "right_shoulder": BTN_RIGHT_SHOULDER,
-    "guide": BTN_GUIDE,
-    "a": BTN_A,
-    "b": BTN_B,
-    "x": BTN_X,
-    "y": BTN_Y,
-}
+BUTTON_NAMES = gamepad.BUTTON_NAMES
+BUTTON_MASK = gamepad.BUTTON_MASK
+AXIS_MIN = gamepad.AXIS_MIN
+AXIS_MAX = gamepad.AXIS_MAX
+TRIGGER_MAX = gamepad.TRIGGER_MAX
 
-BUTTON_MASK = 0xFFFF
-AXIS_MIN = -32768
-AXIS_MAX = 32767
-TRIGGER_MAX = 255
+read_report = gamepad.read_report
+button_names = gamepad.button_names
+
+FIELDS = ("buttons", "lt", "rt", "lx", "ly", "rx", "ry")
 
 
 class PadState:
-    """One pad's current reading, in XUSB units. Mutable on purpose: a reader fills it in place
-    every poll and `link.py` compares it with what it last sent."""
+    """One pad's current reading, in XUSB units.
 
-    __slots__ = ("buttons", "lt", "rt", "lx", "ly", "rx", "ry")
+    Mutable on purpose: a reader fills it in place every poll, and the link compares it with what
+    it last sent so a pad at rest costs nothing."""
+
+    __slots__ = FIELDS
 
     def __init__(self, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0):
         self.buttons = buttons
@@ -84,13 +72,20 @@ class PadState:
         self.ry = ry
 
     def fields(self) -> tuple:
-        return (self.buttons, self.lt, self.rt, self.lx, self.ly, self.rx, self.ry)
+        return tuple(getattr(self, name) for name in FIELDS)
+
+    def as_dict(self) -> dict:
+        return {name: getattr(self, name) for name in FIELDS}
 
     def copy(self) -> "PadState":
         return PadState(*self.fields())
 
     def clear(self) -> None:
-        self.buttons = self.lt = self.rt = self.lx = self.ly = self.rx = self.ry = 0
+        for name in FIELDS:
+            setattr(self, name, 0)
+
+    def is_neutral(self) -> bool:
+        return not any(self.fields())
 
     def __eq__(self, other) -> bool:
         return isinstance(other, PadState) and self.fields() == other.fields()
@@ -99,70 +94,16 @@ class PadState:
         return ("PadState(buttons=0x%04x lt=%d rt=%d lx=%d ly=%d rx=%d ry=%d)" % self.fields())
 
 
-def _clamp(value, low, high) -> int:
-    return low if value < low else (high if value > high else int(value))
-
-
-def _pad_index(pad: int) -> int:
-    if not isinstance(pad, int) or isinstance(pad, bool) or not 0 <= pad < MAX_PADS:
-        raise ValueError(f"pad index must be 0 to {MAX_PADS - 1}")
-    return pad
-
-
 def attach(pad: int = 0, kind: str = KIND_X360) -> dict:
-    """Asks the responder to plug a virtual pad in. Sent once a local pad appears, and again on
-    every reconnect, because the responder's targets die with its link."""
-    if kind not in KINDS:
-        raise ValueError(f"pad kind must be one of: {', '.join(KINDS)}")
-    return {"type": MSG_GAMEPAD_ATTACH, "data": {"pad": _pad_index(pad), "kind": kind}}
+    """Asks the PC to plug a virtual pad in. Sent when a local pad appears, and again on every
+    reconnect, because the responder's targets die with its link."""
+    return gamepad.attach_msg(pad, kind)
 
 
 def detach(pad: int = 0) -> dict:
-    """Unplugs it. A responder must also unplug every pad when the link drops, so a held stick
-    cannot be left pressed on the PC."""
-    return {"type": MSG_GAMEPAD_DETACH, "data": {"pad": _pad_index(pad)}}
+    return gamepad.detach_msg(pad)
 
 
 def report(state: PadState, pad: int = 0, seq: int = None) -> dict:
-    """One full report. Full rather than a delta: a dropped frame then costs one poll's lag
-    instead of leaving the PC holding a button that was released."""
-    data = {
-        "pad": _pad_index(pad),
-        "buttons": _clamp(state.buttons, 0, BUTTON_MASK),
-        "lt": _clamp(state.lt, 0, TRIGGER_MAX),
-        "rt": _clamp(state.rt, 0, TRIGGER_MAX),
-        "lx": _clamp(state.lx, AXIS_MIN, AXIS_MAX),
-        "ly": _clamp(state.ly, AXIS_MIN, AXIS_MAX),
-        "rx": _clamp(state.rx, AXIS_MIN, AXIS_MAX),
-        "ry": _clamp(state.ry, AXIS_MIN, AXIS_MAX),
-    }
-    if seq is not None:
-        data["seq"] = seq
-    return {"type": MSG_GAMEPAD, "data": data}
-
-
-def read_report(message):
-    """The responder's side, kept here so one file defines both directions. Returns the fields or
-    None when the message is malformed; a fork's receiver can use it as-is."""
-    if not isinstance(message, dict) or message.get("type") != MSG_GAMEPAD:
-        return None
-    data = message.get("data")
-    if not isinstance(data, dict):
-        return None
-    ranges = {
-        "pad": (0, MAX_PADS - 1),
-        "buttons": (0, BUTTON_MASK),
-        "lt": (0, TRIGGER_MAX),
-        "rt": (0, TRIGGER_MAX),
-        "lx": (AXIS_MIN, AXIS_MAX),
-        "ly": (AXIS_MIN, AXIS_MAX),
-        "rx": (AXIS_MIN, AXIS_MAX),
-        "ry": (AXIS_MIN, AXIS_MAX),
-    }
-    out = {}
-    for field, (low, high) in ranges.items():
-        value = data.get(field, 0)
-        if type(value) is not int or not low <= value <= high:
-            return None
-        out[field] = value
-    return out
+    """One full report, built by `core.gamepad` from this reading."""
+    return gamepad.report_msg(pad, seq, **state.as_dict())
