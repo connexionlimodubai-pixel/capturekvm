@@ -23,7 +23,7 @@ from core import gamepad, pairing, protocol  # noqa: E402
 from core.tests.responder_harness import B, CAPS, HERE, TOKENS, Machine, entry  # noqa: E402
 
 from capturekvm import padwire  # noqa: E402
-from capturekvm.link import BeamerLink  # noqa: E402
+from capturekvm.link import CAPS as CLIENT_CAPS, BeamerLink  # noqa: E402
 
 PASSED = []
 
@@ -122,6 +122,23 @@ def main() -> int:
         # --- the sequence/ack cycle ---
         check("acknowledgements gave a round-trip time", client.rtt_ms is not None, str(client.rtt_ms))
         check("nothing is left unacknowledged", not client._pending, str(client._pending))
+
+        # --- rumble, the one message that travels back from the PC ---
+        check("the client offered the rumble capability",
+              gamepad.CAP_RUMBLE in CLIENT_CAPS, str(CLIENT_CAPS))
+
+        # The link already records every event; no need to intercept the callback.
+        def felt():
+            return [detail for kind, detail in events if kind == "rumble"]
+
+        machine.injector.fire_rumble(0, 200, 40)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not felt():
+            time.sleep(0.05)
+        check("the game's rumble reached the client", bool(felt()), str(events[-3:]))
+        if felt():
+            check("both motor speeds arrived intact",
+                  (felt()[0]["large"], felt()[0]["small"]) == (200, 40), str(felt()[0]))
 
         # --- release ---
         client.send_unsequenced(padwire.detach(0))

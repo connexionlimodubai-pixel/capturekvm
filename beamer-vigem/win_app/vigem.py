@@ -99,6 +99,12 @@ def _candidate_paths():
     yield Path(DLL_NAME)
 
 
+# VOID CALLBACK (PVIGEM_CLIENT, PVIGEM_TARGET, UCHAR large, UCHAR small, UCHAR led, LPVOID user)
+NOTIFICATION = ctypes.WINFUNCTYPE(
+    None, ctypes.c_void_p, ctypes.c_void_p,
+    ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_void_p)
+
+
 class _Bus:
     """The connection to the driver and the targets plugged into it."""
 
@@ -107,6 +113,7 @@ class _Bus:
         self._dll = None
         self._client = None
         self._targets = {}                 # pad index: PVIGEM_TARGET
+        self._rumble = {}                  # pad index: (callback, kept ctypes thunk)
         self.dll_path = None
         self.error = None                  # why it is unavailable, for the status and the log
         self._failed_at = None             # when the search last came up empty
@@ -164,6 +171,13 @@ class _Bus:
         dll.vigem_target_x360_update.argtypes = [ctypes.c_void_p, ctypes.c_void_p, XUSB_REPORT]
         dll.vigem_target_is_attached.restype = wintypes.BOOL
         dll.vigem_target_is_attached.argtypes = [ctypes.c_void_p]
+        # How the PC learns a game wants the pad to rumble. Without it there is no path from the
+        # game back to the controller in the player's hands.
+        dll.vigem_target_x360_register_notification.restype = ctypes.c_uint
+        dll.vigem_target_x360_register_notification.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, NOTIFICATION, ctypes.c_void_p]
+        dll.vigem_target_x360_unregister_notification.restype = None
+        dll.vigem_target_x360_unregister_notification.argtypes = [ctypes.c_void_p]
 
     def _connect_locked(self):
         if self._client is not None:
@@ -223,6 +237,47 @@ class _Bus:
             self._targets[pad] = target
             return True
 
+    def set_rumble_callback(self, pad: int, on_rumble) -> bool:
+        """Call `on_rumble(pad, large, small)` whenever the game changes the motors.
+
+        ViGEmBus calls back on its own worker thread, so the callback must be quick and must not
+        raise -- an exception crossing a ctypes boundary into a driver callback takes the process
+        with it, so everything here is inside a try.
+
+        Pass None to stop listening."""
+        with self._lock:
+            target = self._targets.get(pad)
+            if target is None or self._client is None:
+                return False
+            self._clear_rumble_locked(pad)
+            if on_rumble is None:
+                return True
+
+            def thunk(_client, _target, large, small, _led, _user):
+                try:
+                    on_rumble(pad, int(large), int(small))
+                except Exception:                           # noqa: BLE001 - never raise into the driver
+                    LOGGER.exception("rumble callback")
+
+            held = NOTIFICATION(thunk)
+            result = self._dll.vigem_target_x360_register_notification(self._client, target, held, None)
+            if result != VIGEM_ERROR_NONE:
+                LOGGER.warning("rumble notifications unavailable: %s", describe(result))
+                return False
+            # The thunk is kept alive here: if it is collected the driver calls freed memory.
+            self._rumble[pad] = (on_rumble, held)
+            return True
+
+    def _clear_rumble_locked(self, pad: int) -> None:
+        if self._rumble.pop(pad, None) is None:
+            return
+        target = self._targets.get(pad)
+        if target is not None and self._dll is not None:
+            try:
+                self._dll.vigem_target_x360_unregister_notification(target)
+            except Exception:                               # noqa: BLE001
+                LOGGER.exception("unregistering rumble")
+
     def report(self, pad: int, buttons: int, lt: int, rt: int, lx: int, ly: int, rx: int, ry: int) -> bool:
         with self._lock:
             target = self._targets.get(pad)
@@ -243,6 +298,8 @@ class _Bus:
 
     def detach(self, pad: int) -> None:
         with self._lock:
+            # Before the target goes: the driver must not call a thunk whose target is freed.
+            self._clear_rumble_locked(pad)
             target = self._targets.pop(pad, None)
             if target is None:
                 return
@@ -297,6 +354,7 @@ _BUS = _Bus()
 
 available = _BUS.available
 attach = _BUS.attach
+set_rumble_callback = _BUS.set_rumble_callback
 report = _BUS.report
 detach = _BUS.detach
 detach_all = _BUS.detach_all

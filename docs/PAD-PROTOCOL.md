@@ -126,8 +126,7 @@ responder's side.
 
 ## Not covered
 
-- **Rumble and LED**, which would travel responder-to-initiator. Nothing here sends them, and
-  Android's `Vibrator` on the pad would be the obvious destination.
+- **LEDs.** ViGEm reports the x360 LED ring number alongside rumble; nothing uses it.
 - **DS4 reports.** `kind: "ds4"` is in the vocabulary, but both clients only ever build x360
   reports; the touchpad and gyro fields a DS4 target accepts have no source here.
 - **More than one pad.** `pad` is 0–3 and both clients use 0.

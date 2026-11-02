@@ -14,9 +14,15 @@ object PadWire {
 
     const val CAP_GAMEPAD = "gamepad"
 
+    /** Offered by a client that can actually make its pad rumble; independent of CAP_GAMEPAD. */
+    const val CAP_RUMBLE = "gamepad_rumble"
+
     const val MSG_ATTACH = "gamepad_attach"
     const val MSG_DETACH = "gamepad_detach"
     const val MSG_REPORT = "gamepad"
+
+    /** The one that travels the other way: the PC telling the client what the game wants. */
+    const val MSG_RUMBLE = "gamepad_rumble"
 
     const val KIND_X360 = "x360"
     const val KIND_DS4 = "ds4"
@@ -44,6 +50,21 @@ object PadWire {
     const val AXIS_MIN = -32768
     const val AXIS_MAX = 32767
     const val TRIGGER_MAX = 255
+
+    /** Motor speeds travel at ViGEmBus's own resolution, one byte each. */
+    const val MOTOR_MAX = 255
+
+    /** (pad, large, small) from a rumble, or null when the frame is malformed. */
+    fun readRumble(message: org.json.JSONObject): Triple<Int, Int, Int>? {
+        if (message.optString("type") != MSG_RUMBLE) return null
+        val data = message.optJSONObject("data") ?: return null
+        val pad = data.optInt("pad", 0)
+        val large = data.optInt("large", 0)
+        val small = data.optInt("small", 0)
+        if (pad !in 0 until MAX_PADS) return null
+        if (large !in 0..MOTOR_MAX || small !in 0..MOTOR_MAX) return null
+        return Triple(pad, large, small)
+    }
 
     /** One pad's reading in XUSB units. */
     data class State(

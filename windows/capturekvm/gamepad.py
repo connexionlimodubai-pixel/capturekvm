@@ -44,6 +44,12 @@ class _XInputState(ctypes.Structure):
     _fields_ = [("dwPacketNumber", ctypes.c_ulong), ("Gamepad", _XInputGamepad)]
 
 
+class _XInputVibration(ctypes.Structure):
+    """XINPUT_VIBRATION. Left is the low-frequency (large) motor, right the high-frequency one."""
+
+    _fields_ = [("wLeftMotorSpeed", ctypes.c_ushort), ("wRightMotorSpeed", ctypes.c_ushort)]
+
+
 class XInput:
     """The DLL, or `available` false when no XInput is present (a Windows install without the
     DirectX runtime, or this module imported off Windows for a test)."""
@@ -54,6 +60,7 @@ class XInput:
         self.dll = None
         self.name = None
         self._get_state = None
+        self._set_state = None
         self.sees_guide = False
         for candidate in self.DLLS:
             try:
@@ -73,6 +80,10 @@ class XInput:
         if self._get_state is not None:
             self._get_state.argtypes = [ctypes.c_ulong, ctypes.POINTER(_XInputState)]
             self._get_state.restype = ctypes.c_ulong
+        self._set_state = getattr(self.dll, "XInputSetState", None)
+        if self._set_state is not None:
+            self._set_state.argtypes = [ctypes.c_ulong, ctypes.POINTER(_XInputVibration)]
+            self._set_state.restype = ctypes.c_ulong
 
     @property
     def available(self) -> bool:
@@ -98,6 +109,20 @@ class XInput:
             rx=pad.sThumbRX,
             ry=pad.sThumbRY,
         )
+
+    def rumble(self, user_index: int, large: int, small: int) -> bool:
+        """Drive the motors. `large` and `small` are 0-255, as the wire carries them.
+
+        XInput wants 16 bits, so each is multiplied by 257 -- which maps 255 exactly onto 65535
+        rather than leaving the top of the range unreachable."""
+        if self._set_state is None:
+            return False
+        vibration = _XInputVibration(
+            wLeftMotorSpeed=max(0, min(255, int(large))) * 257,
+            wRightMotorSpeed=max(0, min(255, int(small))) * 257,
+        )
+        result = self._set_state(ctypes.c_ulong(user_index), ctypes.byref(vibration))
+        return result == ERROR_SUCCESS
 
     def connected(self) -> list:
         return [index for index in range(XUSER_MAX_COUNT) if self.read(index) is not None]
@@ -164,7 +189,22 @@ class PadPoller:
         self._thread = threading.Thread(target=self._run, name="pad-poller", daemon=True)
         self._thread.start()
 
+    def rumble(self, large: int, small: int) -> bool:
+        """What the PC asked for, sent to the pad actually plugged in here."""
+        slot = self.connected_slot
+        if slot is None:
+            return False
+        return self.xinput.rumble(slot, large, small)
+
+    def stop_rumble(self) -> None:
+        """Always safe to call. A pad left buzzing because a link dropped is the rumble version
+        of a stuck key, so this is called on every way out."""
+        slot = self.connected_slot
+        if slot is not None:
+            self.xinput.rumble(slot, 0, 0)
+
     def stop(self, timeout: float = 1.0) -> None:
+        self.stop_rumble()
         self._stop.set()
         self._release_timer_resolution()
         thread, self._thread = self._thread, None

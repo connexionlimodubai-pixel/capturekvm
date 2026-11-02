@@ -39,7 +39,7 @@ READ_TIMEOUT = 0.25
 #
 # A capability here is a promise to handle what arrives, so nothing goes on this list that the app
 # would then drop: `clipboard_image` is here because `clipboard.write_local` decodes PNGs.
-CAPS = ("ping_rtt", "clipboard", "clipboard_image", padwire.CAP_GAMEPAD)
+CAPS = ("ping_rtt", "clipboard", "clipboard_image", padwire.CAP_GAMEPAD, padwire.CAP_RUMBLE)
 
 STATE_DOWN = "down"
 STATE_DIALLING = "dialling"
@@ -372,6 +372,11 @@ class BeamerLink:
             probe = protocol.read_ping(message)
             if probe and probe.get("probe"):
                 self.send_unsequenced(protocol.ping_msg(echo=probe["probe"]))
+            return
+        if kind == padwire.MSG_GAMEPAD_RUMBLE:
+            read = padwire.read_rumble(message)
+            if read is not None:
+                self._emit("rumble", read)
             return
         if kind == protocol.MSG_CLIPBOARD:
             read = protocol.read_clipboard(message)

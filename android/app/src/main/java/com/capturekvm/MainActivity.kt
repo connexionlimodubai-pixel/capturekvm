@@ -65,6 +65,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
 
     private val main = Handler(Looper.getMainLooper())
     private val pad = PadReader { state -> sendPad(state) }
+    private val rumbler = Rumbler()
 
     private var cardText = ""
     private var linkText = ""
@@ -335,6 +336,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         val current = link
         link = null
         pad.reset()
+        rumbler.stop()
         if (current != null) {
             if (padAttached) {
                 current.sendUnsequenced(PadWire.detach(0))
@@ -363,8 +365,16 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                     sendClipboard()
                 } else {
                     padAttached = false
+                    // The PC sends a stop when it lets go, but a link that died sends nothing.
+                    rumbler.stop()
                 }
                 showStatus()
+            }
+            "rumble" -> {
+                // The pad in the user's hands, not the tablet: attach() follows whichever
+                // device PadReader last saw.
+                rumbler.attach(pad.deviceId)
+                rumbler.set(detail.optInt("large"), detail.optInt("small"))
             }
             "clipboard" -> receiveClipboard(detail.optString("text"))
             "error" -> {

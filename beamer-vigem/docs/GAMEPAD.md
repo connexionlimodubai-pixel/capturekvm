@@ -112,6 +112,40 @@ From `xinput.h` / `XUSB_BUTTON`, unchanged so the two ends cannot drift:
 | `0x0080` | right thumb | | |
 | `0x0100` | left shoulder | | |
 
+### `gamepad_rumble` — responder to initiator
+
+The one message in this extension that travels the other way. The game runs on the PC, so the PC
+is the only side that knows when to rumble.
+
+```json
+{"type": "gamepad_rumble", "data": {"pad": 0, "large": 200, "small": 40}}
+```
+
+| Field | Type | |
+|---|---|---|
+| `pad` | int | 0–3, default 0 |
+| `large` | int | 0–255, the low-frequency motor |
+| `small` | int | 0–255, the high-frequency motor |
+
+**Not sequenced.** Only input from the initiator carries `seq` and is acknowledged (section 9);
+this goes the other way and is fire-and-forget, like `ack` itself. A lost frame is a missed buzz,
+and the next one supersedes it.
+
+Speeds are carried at **ViGEmBus's own resolution, one byte each**, not XInput's sixteen bits.
+Widening here would invent precision the source does not have; a client whose own API wants 16
+bits multiplies by 257, which maps 255 exactly onto 65535.
+
+A malformed frame is **dropped, not read as silence**. A client treating junk as "stop" would
+stutter; one treating it as "go" could leave the motors running.
+
+Requires the initiator to advertise **`gamepad_rumble`** in `caps` — separate from `gamepad`,
+because the two are independent: a tablet can send pad input with no motors to drive.
+
+The responder sends on change only, and no more than 40 times a second: a game is free to set the
+motors every frame and relaying that verbatim would spend the link on buzzing. **A change back to
+stopped is never rate-limited or dropped** — a missed stop leaves the pad running in someone's
+hands. Letting go, being taken over and losing the link all send a stop before unplugging.
+
 ## What the responder does
 
 `core/receiver.py`, `_on_pad` and the three `_pad_*_locked` helpers.

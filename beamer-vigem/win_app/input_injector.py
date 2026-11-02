@@ -839,6 +839,11 @@ def gamepad_report(pad: int, buttons: int, lt: int, rt: int, lx: int, ly: int, r
     _vigem().report(pad, buttons, lt, rt, lx, ly, rx, ry)
 
 
+def gamepad_set_rumble_callback(pad: int, on_rumble) -> bool:
+    """Ask to be told when a game changes the pad's motors. See win_app/vigem.py."""
+    return _vigem().set_rumble_callback(pad, on_rumble)
+
+
 def gamepad_shutdown() -> None:
     """Called when the app quits, so no phantom controller is left in the device list."""
     if _VIGEM is not None:

@@ -81,6 +81,7 @@ class FakeInjector:
         # Virtual pads (docs/GAMEPAD.md): which are plugged in, and whether plugging in works.
         self.pads = {}
         self.pad_attach_ok = True
+        self.rumble_listeners = {}
 
     def _add(self, *call):
         with self._lock:
@@ -127,6 +128,22 @@ class FakeInjector:
 
     def gamepad_report(self, pad, buttons, lt, rt, lx, ly, rx, ry):
         self._add("pad", pad, buttons, lt, rt, lx, ly, rx, ry)
+
+    def gamepad_set_rumble_callback(self, pad, on_rumble):
+        self._add("pad_rumble_listen", pad, on_rumble is not None)
+        with self._lock:
+            if on_rumble is None:
+                self.rumble_listeners.pop(pad, None)
+            else:
+                self.rumble_listeners[pad] = on_rumble
+        return True
+
+    def fire_rumble(self, pad, large, small):
+        """Stands in for ViGEmBus calling back when a game sets the motors."""
+        with self._lock:
+            listener = self.rumble_listeners.get(pad)
+        if listener is not None:
+            listener(pad, large, small)
 
     def plugged(self):
         with self._lock:

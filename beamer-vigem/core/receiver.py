@@ -37,6 +37,9 @@ ACK_COALESCE_SECONDS = 0.015
 LOCK_CHECK_SECONDS = 0.5
 INJECTION_ERROR_STATUS_INTERVAL_SECONDS = 5.0
 SLOW_INJECTION_SECONDS = 0.25
+# A game may set the motors every frame. Relaying that verbatim would spend the link on buzzing,
+# so changes are rate-limited -- except a stop, which always goes.
+RUMBLE_MAX_HZ = 40.0
 SLOW_INJECTION_LOG_INTERVAL_SECONDS = 1.0
 CLIPBOARD_RETRY_ATTEMPTS = 20
 CLIPBOARD_RETRY_SECONDS = 0.05
@@ -103,14 +106,35 @@ def _unplug_pads(injector, link) -> None:
     if not isinstance(pads, dict) or not pads:
         return
     detach = getattr(injector, "gamepad_detach", None)
+    listen = getattr(injector, "gamepad_set_rumble_callback", None)
     for pad in sorted(pads):
         if detach is None:
             continue
         try:
+            # Stop listening before the target goes, and tell the peer to stop its motors: a
+            # link lost mid-rumble must not leave the pad buzzing in someone's hands.
+            if listen is not None:
+                listen(pad, None)
+            _tell_to_stop_rumbling(link, pad)
             detach(pad)
         except Exception:
             LOGGER.exception("Could not unplug virtual pad %s for %s", pad, getattr(link, "name", "a peer"))
     pads.clear()
+
+
+def _tell_to_stop_rumbling(link, pad: int) -> None:
+    """Ask the peer to stop its motors, if it is still there to ask.
+
+    Read defensively for the same reason as `pads` above: `_release_locked` is called with a
+    stand-in link in upstream's tests, which carries only what those tests need."""
+    closed = getattr(link, "closed", None)
+    post = getattr(link, "post", None)
+    if not callable(post) or (closed is not None and getattr(closed, "is_set", bool)()):
+        return
+    try:
+        post(gamepad.rumble_msg(pad=pad))
+    except Exception:
+        LOGGER.exception("Could not ask %s to stop rumbling", getattr(link, "name", "a peer"))
 
 
 def _close_socket(sock: Optional[socket.socket]) -> None:
@@ -417,6 +441,8 @@ class _Link:
         self.route = 0              # the last route accepted on this link
         self.held = {}              # ("key" or "button", name): `us`, what the owner holds down here
         self.pads = {}              # pad index: kind, the virtual pads plugged in for this link
+        self.rumble_sent = {}       # pad index: the last (large, small) posted, to send on change
+        self.rumble_at = {}         # pad index: when, so a game cannot flood the link
         self.closed = threading.Event()
         self.cond = threading.Condition()
         self.outbox = collections.deque()
@@ -1214,6 +1240,7 @@ class LinkResponder:
         try:
             if attach(pad, kind):
                 link.pads[pad] = kind
+                self._listen_for_rumble(link, pad)
                 LOGGER.info("Plugged a virtual %s pad %d in for %s", kind, pad, link.name)
             else:
                 LOGGER.warning("A virtual %s pad for %s could not be plugged in", kind, link.name)
@@ -1234,6 +1261,39 @@ class LinkResponder:
             LOGGER.exception("A virtual pad for %s could not be unplugged", link.name)
         finally:
             link.pads.pop(pad, None)
+
+    def _listen_for_rumble(self, link: _Link, pad: int) -> None:
+        """Forward the game's rumble to whoever is holding the controller.
+
+        Only when that peer said it can do something with it: a tablet with no motors would just
+        drop the frames, and the link has better uses for them."""
+        listen = getattr(self._injector_module(), "gamepad_set_rumble_callback", None)
+        if listen is None or gamepad.CAP_RUMBLE not in link.caps:
+            return
+        try:
+            listen(pad, lambda index, large, small: self._on_rumble(link, index, large, small))
+        except Exception:
+            LOGGER.exception("Could not listen for rumble for %s", link.name)
+
+    def _on_rumble(self, link: _Link, pad: int, large: int, small: int) -> None:
+        """From the driver's own thread. Posts to the link, which is thread-safe.
+
+        Sent on change, and no more than RUMBLE_MAX_HZ times a second: a game is free to set the
+        motors every frame, and relaying that verbatim would spend the link on buzzing. A change
+        back to stopped is never dropped -- a missed stop leaves the pad running in someone's
+        hands."""
+        if link.closed.is_set():
+            return
+        now = time.monotonic()
+        pair = (int(large), int(small))
+        stopping = pair == (0, 0)
+        if link.rumble_sent.get(pad) == pair:
+            return
+        if not stopping and now - link.rumble_at.get(pad, 0.0) < 1.0 / RUMBLE_MAX_HZ:
+            return
+        link.rumble_sent[pad] = pair
+        link.rumble_at[pad] = now
+        link.post(gamepad.rumble_msg(large=pair[0], small=pair[1], pad=pad))
 
     def _pad_report_locked(self, link: _Link, read: dict) -> None:
         injector = self._injector_module()

@@ -678,6 +678,7 @@ class MainWindow(QMainWindow):
         self.stop_driving()
         self.pad.stop()
         link, self.link = self.link, None
+        self.pad.stop_rumble()
         if link is not None:
             if self.pad_attached:
                 link.send_unsequenced(padwire.detach(0))
@@ -698,8 +699,14 @@ class MainWindow(QMainWindow):
             self._send_clipboard()
         elif kind == "state" and detail.get("state") != STATE_UP:
             self.pad_attached = False
+            # The PC sends a stop when it lets go, but a link that simply died sends nothing,
+            # and a pad left buzzing is the rumble version of a stuck key.
+            self.pad.stop_rumble()
             if self.view.driving:
                 self.stop_driving()
+        elif kind == "rumble":
+            # The game on the PC asked for it. Straight to the pad in the user's hands.
+            self.pad.rumble(detail.get("large", 0), detail.get("small", 0))
         elif kind == "clipboard":
             self._receive_clipboard(detail)
         elif kind == "error":

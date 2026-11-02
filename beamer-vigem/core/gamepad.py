@@ -19,9 +19,18 @@ of `core`.
 
 CAP_GAMEPAD = "gamepad"
 
+# Offered by an *initiator* that can make its own pad rumble. Separate from CAP_GAMEPAD because
+# the two are independent: a tablet can send pad input with no motors to drive, and a responder
+# must not send rumble to a peer that would only drop it.
+CAP_RUMBLE = "gamepad_rumble"
+
 MSG_GAMEPAD_ATTACH = "gamepad_attach"
 MSG_GAMEPAD_DETACH = "gamepad_detach"
 MSG_GAMEPAD = "gamepad"
+
+# The one message in this extension that travels the other way: responder to initiator. The game
+# runs on the PC, so the PC is the only side that knows when to rumble.
+MSG_GAMEPAD_RUMBLE = "gamepad_rumble"
 
 PAD_TYPES = frozenset({MSG_GAMEPAD_ATTACH, MSG_GAMEPAD_DETACH, MSG_GAMEPAD})
 
@@ -68,6 +77,12 @@ AXIS_MAX = 32767
 TRIGGER_MAX = 255
 
 NEUTRAL = {"buttons": 0, "lt": 0, "rt": 0, "lx": 0, "ly": 0, "rx": 0, "ry": 0}
+
+# Motor speeds are carried at the resolution ViGEmBus reports them in -- one byte each -- rather
+# than XInput's 16 bits. Widening here would invent precision the source does not have; a client
+# whose own API wants 16 bits multiplies by 257, which maps 255 exactly onto 65535.
+MOTOR_MAX = 255
+RUMBLE_SCALE_TO_16_BIT = 257
 
 _REPORT_RANGES = (
     ("buttons", 0, BUTTON_MASK),
@@ -176,6 +191,47 @@ def read_report(message):
             return None
         read[name] = value
     return read
+
+
+# --- rumble: responder to initiator ---
+
+def rumble_msg(large: int = 0, small: int = 0, pad: int = 0) -> dict:
+    """What the game asked the pad to do. `large` is the low-frequency motor, `small` the
+    high-frequency one, both 0 to 255, as ViGEmBus reports them.
+
+    Not sequenced. Only input from the initiator carries `seq` and is acknowledged (WIRE.md
+    section 9); this goes the other way and is fire-and-forget, like `ack` itself. A lost rumble
+    frame is a missed buzz, and the next one supersedes it anyway."""
+    if not _int(pad, 0, MAX_PADS - 1):
+        raise ValueError(f"a pad index is 0 to {MAX_PADS - 1}")
+    return {"type": MSG_GAMEPAD_RUMBLE, "data": {
+        "pad": pad,
+        "large": _clamp(large, 0, MOTOR_MAX),
+        "small": _clamp(small, 0, MOTOR_MAX),
+    }}
+
+
+def read_rumble(message):
+    """{"pad", "large", "small"} or None.
+
+    A malformed frame is dropped rather than read as silence: a client that treated junk as
+    "stop" would stutter, and one that treated it as "go" could leave the motors running."""
+    data = _data(message, MSG_GAMEPAD_RUMBLE)
+    if data is None:
+        return None
+    pad = data.get("pad", 0)
+    if not _int(pad, 0, MAX_PADS - 1):
+        return None
+    read = {"pad": pad}
+    for name in ("large", "small"):
+        value = data.get(name, 0)
+        if not _int(value, 0, MOTOR_MAX):
+            return None
+        read[name] = value
+    return read
+
+
+STOP_RUMBLE = {"large": 0, "small": 0}
 
 
 def button_names(buttons: int) -> list:

@@ -129,6 +129,60 @@ class PadLink(unittest.TestCase):
         first.let_go(target=C)
         self.assertTrue(wait_for(lambda: machine.injector.plugged() == {}))
 
+    # --- rumble, which goes the other way ---
+
+    def test_the_game_s_rumble_reaches_the_peer_holding_the_pad(self):
+        machine = self.machine()
+        link, _ = self.initiator(machine, caps=PAD_CAPS + [gamepad.CAP_RUMBLE])
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+        link.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+
+        machine.injector.fire_rumble(0, 200, 40)
+        got = link.expect(gamepad.MSG_GAMEPAD_RUMBLE)
+        self.assertIsNotNone(got, "a game setting the motors must reach the controller")
+        self.assertEqual((got["large"], got["small"]), (200, 40))
+
+    def test_a_peer_that_cannot_rumble_is_not_sent_any(self):
+        machine = self.machine()
+        link, _ = self.initiator(machine, caps=PAD_CAPS)      # no CAP_RUMBLE
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+        link.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        machine.injector.fire_rumble(0, 200, 40)
+        self.assertIsNone(link.expect(gamepad.MSG_GAMEPAD_RUMBLE, timeout=0.6))
+
+    def test_letting_go_tells_the_peer_to_stop(self):
+        # A link lost mid-rumble must not leave the pad buzzing in someone's hands.
+        machine = self.machine()
+        link, _ = self.initiator(machine, caps=PAD_CAPS + [gamepad.CAP_RUMBLE])
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+        link.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        machine.injector.fire_rumble(0, 255, 255)
+        self.assertIsNotNone(link.expect(gamepad.MSG_GAMEPAD_RUMBLE))
+
+        link.let_go()
+        stop = link.expect(gamepad.MSG_GAMEPAD_RUMBLE)
+        self.assertIsNotNone(stop, "letting go must send a stop")
+        self.assertEqual((stop["large"], stop["small"]), (0, 0))
+
+    def test_an_unchanged_rumble_is_not_repeated(self):
+        machine = self.machine()
+        link, _ = self.initiator(machine, caps=PAD_CAPS + [gamepad.CAP_RUMBLE])
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+        link.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        for _ in range(5):
+            machine.injector.fire_rumble(0, 128, 0)
+        self.assertIsNotNone(link.expect(gamepad.MSG_GAMEPAD_RUMBLE))
+        self.assertIsNone(link.expect(gamepad.MSG_GAMEPAD_RUMBLE, timeout=0.5),
+                          "a game setting the same value every frame must not flood the link")
+
     # --- what the driver says ---
 
     def test_a_pad_that_cannot_be_plugged_in_is_not_recorded(self):

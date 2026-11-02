@@ -40,7 +40,7 @@ class BeamerLink(
         // A capability is a promise to handle what arrives. `clipboard` is offered because the
         // app sets Android's clipboard from it; `clipboard_image` is not, because it would then
         // be sent PNGs it has no way to put anywhere.
-        val CAPS = listOf("ping_rtt", "clipboard", PadWire.CAP_GAMEPAD)
+        val CAPS = listOf("ping_rtt", "clipboard", PadWire.CAP_GAMEPAD, PadWire.CAP_RUMBLE)
 
         const val STATE_DOWN = "down"
         const val STATE_DIALLING = "dialling"
@@ -355,6 +355,11 @@ class BeamerLink(
             Wire.MSG_PING -> {
                 val probe = message.optJSONObject("data")?.optInt("probe", 0) ?: 0
                 if (probe > 0) sendUnsequenced(Wire.ping(echo = probe))
+            }
+            PadWire.MSG_RUMBLE -> {
+                PadWire.readRumble(message)?.let { (pad, large, small) ->
+                    emit("rumble", JSONObject().put("pad", pad).put("large", large).put("small", small))
+                }
             }
             Wire.MSG_CLIPBOARD -> {
                 val text = Wire.readClipboardText(message)

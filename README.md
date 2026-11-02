@@ -135,9 +135,16 @@ ordinary controller — including the Guide button. Stick and trigger values are
 **unmodified**: the game applies its own deadzone, and a second one here would only make the
 sticks feel worse.
 
-What is still missing for gaming: **rumble** (it needs a message from the PC back to the client,
-which the protocol does not have yet) and **a second pad** for local co-op (the wire allows four;
-both ends only use pad 0).
+**Rumble works.** The game's force feedback travels back from the PC and drives the motors in the
+pad you are actually holding — XInput on Windows, the controller's own vibrators on Android
+(both of them separately, on Android 12 and later). It is the one message that goes responder to
+initiator, since the game runs on the PC.
+
+Anything that ends the link sends a **stop** first, and both clients also stop their motors when a
+link simply dies without saying anything: a pad left buzzing is the rumble version of a stuck key.
+
+What is still missing: **a second pad** for local co-op — the wire allows four, both ends use
+pad 0.
 
 ### Picture quality
 

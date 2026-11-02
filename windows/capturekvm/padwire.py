@@ -16,10 +16,14 @@ from core import gamepad
 
 # Re-exported so callers say `padwire.BTN_A` and need not know which module defines it.
 CAP_GAMEPAD = gamepad.CAP_GAMEPAD
+CAP_RUMBLE = gamepad.CAP_RUMBLE
+MOTOR_MAX = gamepad.MOTOR_MAX
+RUMBLE_SCALE_TO_16_BIT = gamepad.RUMBLE_SCALE_TO_16_BIT
 
 MSG_GAMEPAD_ATTACH = gamepad.MSG_GAMEPAD_ATTACH
 MSG_GAMEPAD_DETACH = gamepad.MSG_GAMEPAD_DETACH
 MSG_GAMEPAD = gamepad.MSG_GAMEPAD
+MSG_GAMEPAD_RUMBLE = gamepad.MSG_GAMEPAD_RUMBLE
 
 KIND_X360 = gamepad.KIND_X360
 KIND_DS4 = gamepad.KIND_DS4
@@ -49,6 +53,7 @@ AXIS_MAX = gamepad.AXIS_MAX
 TRIGGER_MAX = gamepad.TRIGGER_MAX
 
 read_report = gamepad.read_report
+read_rumble = gamepad.read_rumble
 button_names = gamepad.button_names
 
 FIELDS = ("buttons", "lt", "rt", "lx", "ly", "rx", "ry")

@@ -118,6 +118,43 @@ class Validators(unittest.TestCase):
         self.assertEqual(read["buttons"], gamepad.BTN_B)
 
 
+class Rumble(unittest.TestCase):
+    def test_a_rumble_carries_both_motors(self):
+        self.assertEqual(
+            gamepad.rumble_msg(200, 40),
+            {"type": "gamepad_rumble", "data": {"pad": 0, "large": 200, "small": 40}})
+
+    def test_it_is_not_sequenced(self):
+        # Only input from the initiator is acknowledged; this travels the other way.
+        self.assertNotIn("seq", gamepad.rumble_msg(1, 2)["data"])
+
+    def test_motor_speeds_are_clamped(self):
+        data = gamepad.rumble_msg(999, -5)["data"]
+        self.assertEqual(data["large"], gamepad.MOTOR_MAX)
+        self.assertEqual(data["small"], 0)
+
+    def test_it_reads_back(self):
+        self.assertEqual(gamepad.read_rumble(gamepad.rumble_msg(7, 8, pad=2)),
+                         {"pad": 2, "large": 7, "small": 8})
+
+    def test_a_missing_motor_reads_as_stopped(self):
+        self.assertEqual(gamepad.read_rumble({"type": "gamepad_rumble", "data": {}}),
+                         {"pad": 0, "large": 0, "small": 0})
+
+    def test_junk_is_dropped_rather_than_read_as_silence(self):
+        # Treating a malformed frame as "stop" would stutter; as "go" could leave it running.
+        for data in ({"large": 300}, {"large": 1.0}, {"small": True}, {"pad": 9}):
+            with self.subTest(data):
+                self.assertIsNone(gamepad.read_rumble({"type": "gamepad_rumble", "data": data}))
+
+    def test_the_byte_scale_maps_exactly_onto_xinput(self):
+        # A client whose API wants 16 bits multiplies by 257; full scale must land on full scale.
+        self.assertEqual(gamepad.MOTOR_MAX * gamepad.RUMBLE_SCALE_TO_16_BIT, 65535)
+
+    def test_rumble_is_its_own_capability(self):
+        self.assertNotEqual(gamepad.CAP_RUMBLE, gamepad.CAP_GAMEPAD)
+
+
 class Vocabulary(unittest.TestCase):
     def test_every_button_name_is_one_bit_inside_the_mask(self):
         for name, bit in gamepad.BUTTON_NAMES.items():
