@@ -276,6 +276,25 @@ class PadLink(unittest.TestCase):
         self.assertNotIn("pad", [call[0] for call in machine.injector.seen()],
                          "no report should reach a pad that was never plugged in")
 
+    def test_a_driver_that_refuses_is_not_asked_again_on_every_report(self):
+        """A refused attach must not be retried per report.
+
+        Windows flashes its busy cursor each time something tries to enumerate a device, so
+        retrying on every button press turns a failed plug-in into a strobing cursor -- which is
+        what it looked like in the wild."""
+        machine = self.machine()
+        machine.injector.pad_attach_ok = False
+        link, _ = self.initiator(machine)
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+
+        for index in range(12):
+            seq = link.input(gamepad.report_msg(0, buttons=gamepad.BTN_A if index % 2 else 0))
+            self.assertIsNotNone(link.acked(seq))
+        attempts = len([c for c in machine.injector.seen() if c[0] == "pad_attach"])
+        self.assertLessEqual(attempts, 2,
+                             f"12 reports caused {attempts} attach attempts; it should back off")
+
     def test_a_malformed_report_injects_nothing(self):
         machine = self.machine()
         link, _ = self.initiator(machine)

@@ -45,6 +45,12 @@ RUMBLE_MAX_HZ = 40.0
 # disconnected controller -- which in most games means a pause menu or a modal dialog, mid-fight.
 # The pad is zeroed at once either way, so nothing can be left held; only the socket lingers.
 PAD_GRACE_SECONDS = 6.0
+# How long to leave a pad alone after plugging it in failed. Without this, a report that finds no
+# pad retries the attach, so a driver that refuses turns every button press into another attempt
+# -- and Windows flashes its busy cursor each time it tries to enumerate the device. One line in
+# the log every few seconds is the right amount of noise for something that is not going to start
+# working by itself.
+PAD_ATTACH_RETRY_SECONDS = 5.0
 SLOW_INJECTION_LOG_INTERVAL_SECONDS = 1.0
 CLIPBOARD_RETRY_ATTEMPTS = 20
 CLIPBOARD_RETRY_SECONDS = 0.05
@@ -484,6 +490,7 @@ class _Link:
         self.pads = {}              # pad index: kind, the virtual pads plugged in for this link
         self.rumble_sent = {}       # pad index: the last (large, small) posted, to send on change
         self.rumble_at = {}         # pad index: when, so a game cannot flood the link
+        self.pad_failed_at = {}     # pad index: when plugging it in last failed
         self.closed = threading.Event()
         self.cond = threading.Condition()
         self.outbox = collections.deque()
@@ -1307,18 +1314,29 @@ class LinkResponder:
             return
         if link.pads.get(pad) == kind:
             return
+        failed_at = link.pad_failed_at.get(pad)
+        if failed_at is not None and time.monotonic() - failed_at < PAD_ATTACH_RETRY_SECONDS:
+            return
         if pad in link.pads:
             # A different kind on the same index: the old target goes before the new one arrives.
             self._pad_detach_locked(link, pad)
         try:
             if attach(pad, kind):
                 link.pads[pad] = kind
+                link.pad_failed_at.pop(pad, None)
                 self._listen_for_rumble(link, pad)
                 LOGGER.info("Plugged a virtual %s pad %d in for %s", kind, pad, link.name)
             else:
-                LOGGER.warning("A virtual %s pad for %s could not be plugged in", kind, link.name)
+                link.pad_failed_at[pad] = time.monotonic()
+                reason = getattr(self._injector_module(), "gamepad_unavailable_reason", None)
+                LOGGER.warning(
+                    "A virtual %s pad for %s could not be plugged in: %s. Not retrying for %.0fs; "
+                    "run tools/vigem_check.py to test the driver on its own.",
+                    kind, link.name, (reason and reason()) or "the driver refused",
+                    PAD_ATTACH_RETRY_SECONDS)
                 self._input_error_status(link)
         except Exception:
+            link.pad_failed_at[pad] = time.monotonic()
             LOGGER.exception("A virtual pad for %s could not be plugged in", link.name)
             self._input_error_status(link)
 
