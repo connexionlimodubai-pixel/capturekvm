@@ -12,18 +12,20 @@ falls behind, the right thing is to skip to the newest frame, not to play out a 
 import logging
 import sys
 import threading
+import time
 
 from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QCursor, QGuiApplication, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSizePolicy,
-    QToolBar, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QSizePolicy, QToolBar, QVBoxLayout, QWidget,
 )
 
 from core import protocol
 
-from . import APP_NAME, __version__, audio, capture, clipboard, gamepad, inputmap, pair, padwire, process, store
+from . import (APP_NAME, __version__, audio, capture, clipboard, discover, gamepad, inputmap,
+               lowlevelkeys, pair, padwire, process, store)
 from .picturedialog import PictureDialog
 from .link import STATE_UP, BeamerLink
 
@@ -53,9 +55,10 @@ class FrameSlot(QObject):
         super().__init__()
         self._lock = threading.Lock()
         self._image = None
+        self._captured_at = None
         self.dropped = 0
 
-    def put(self, frame) -> None:
+    def put(self, frame, captured_at=None) -> None:
         height, width = frame.shape[:2]
         # copy(): the numpy buffer belongs to OpenCV and is reused on the next read.
         image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_BGR888).copy()
@@ -63,12 +66,13 @@ class FrameSlot(QObject):
             if self._image is not None:
                 self.dropped += 1
             self._image = image
+            self._captured_at = captured_at
         self.arrived.emit()
 
     def take(self):
         with self._lock:
             image, self._image = self._image, None
-            return image
+            return image, self._captured_at
 
 
 class VideoView(QWidget):
@@ -160,6 +164,17 @@ class VideoView(QWidget):
     def _recentre(self) -> None:
         self._centre = self.mapToGlobal(self.rect().center())
         QCursor.setPos(self._centre)
+
+    def note_held(self, name: str) -> None:
+        """A key sent by something other than this widget's own events -- the reserved-key hook.
+
+        Recorded here so `_release_everything` lets it go: a Windows key left down on the PC
+        because it arrived by a different route is exactly the stuck-key failure drive mode is
+        meant to make impossible."""
+        self._held_keys.add(name)
+
+    def note_released(self, name: str) -> None:
+        self._held_keys.discard(name)
 
     def _release_everything(self) -> None:
         """Every key and button still down goes up, so nothing is left held on the PC."""
@@ -276,17 +291,39 @@ class DeviceScanner(QObject):
 
 
 class PairDialog(QDialog):
-    """Type the PC's address and the six digits it is showing."""
+    """Pick the PC from the ones broadcasting, or type its address, plus the six digits."""
+
+    # Discovery runs on its own thread. A queued signal is the way across; QTimer.singleShot
+    # from a thread with no event loop of its own simply never fires, which is how the list
+    # stayed empty the first time.
+    foundChanged = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Pair with a PC")
+
+        # Beamer broadcasts only while it is showing a code, so anything in this list is ready
+        # to pair now. It is a convenience, not a trust boundary: a beacon is unauthenticated
+        # and the code is what makes the exchange safe.
+        self.found = QListWidget()
+        self.found.setMaximumHeight(108)
+        self.found.itemSelectionChanged.connect(self._pick)
+        self.searching = QLabel("Looking for PCs showing a pairing code...")
+        self.searching.setWordWrap(True)
+
+        self.foundChanged.connect(self._show_found)
+        self.discovery = discover.Discovery(self.foundChanged.emit)
+        if not self.discovery.start():
+            self.searching.setText(f"Not searching: {self.discovery.error}. Type the address instead.")
+
         self.address = QLineEdit()
         self.address.setPlaceholderText("192.168.1.20")
         self.code = QLineEdit()
         self.code.setPlaceholderText("123456")
         self.code.setMaxLength(7)
         form = QFormLayout()
+        form.addRow("Found", self.found)
+        form.addRow("", self.searching)
         form.addRow("PC address", self.address)
         form.addRow("Pairing code", self.code)
         hint = QLabel("On the PC: open Beamer, choose Pair, and read off the six digits.\n"
@@ -299,6 +336,29 @@ class PairDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(hint)
         layout.addWidget(buttons)
+
+    def _show_found(self, machines) -> None:
+        chosen = self.address.text().strip()
+        self.found.clear()
+        for entry in machines:
+            item = QListWidgetItem(discover.describe(entry))
+            item.setData(Qt.UserRole, entry["address"])
+            self.found.addItem(item)
+            if entry["address"] == chosen:
+                item.setSelected(True)
+        self.searching.setText(
+            "Nothing is broadcasting. A PC only appears while Beamer is showing a code -- "
+            "open Pair on it, or type the address."
+            if not machines else f"{len(machines)} found. Pick one, or type an address.")
+
+    def _pick(self) -> None:
+        for item in self.found.selectedItems():
+            self.address.setText(item.data(Qt.UserRole))
+            self.code.setFocus()
+
+    def done(self, result) -> None:
+        self.discovery.stop()
+        super().done(result)
 
     def values(self) -> tuple:
         return self.address.text().strip(), self.code.text().strip()
@@ -326,6 +386,7 @@ class MainWindow(QMainWindow):
         # The newest frame as the card sent it, before processing: Measure must read what the
         # card is doing, not what the correction has already done to it.
         self._raw_frame = None
+        self._pipeline_ms = None
         self.slot = FrameSlot()
         self.slot.arrived.connect(self._drain_frames)
         self.capture = capture.CaptureWorker(self.slot.put, self._on_capture_status,
@@ -344,6 +405,9 @@ class MainWindow(QMainWindow):
         self.scanner = DeviceScanner()
         self.scanner.found.connect(self._on_devices_found)
 
+        self.reserved_keys = lowlevelkeys.ReservedKeys(
+            self._reserved_key, lambda: self.view.driving, self._is_release_chord)
+
         self._build_toolbar()
         self._build_status()
         self._refresh_devices()
@@ -353,6 +417,9 @@ class MainWindow(QMainWindow):
         self.heartbeat = QTimer(self)
         self.heartbeat.timeout.connect(self._update_status)
         self.heartbeat.start(500)
+
+        if not self.reserved_keys.install():
+            LOGGER.info("the Windows key and Alt+Tab cannot be forwarded: %s", self.reserved_keys.error)
 
         if config.setting("start_fullscreen"):
             self.showFullScreen()
@@ -407,6 +474,16 @@ class MainWindow(QMainWindow):
         self.drive_action.setShortcut(QKeySequence(Qt.Key_F9))
         self.drive_action.triggered.connect(self._toggle_drive)
         bar.addAction(self.drive_action)
+
+        keys_button = QPushButton("Send key")
+        keys_menu = QMenu(keys_button)
+        for label, names in lowlevelkeys.CHORDS:
+            keys_menu.addAction(label, lambda n=names: self._send_chord(n))
+        keys_button.setMenu(keys_menu)
+        keys_button.setToolTip(
+            "Chords Windows will not let a window receive. The Windows key and Alt+Tab are also "
+            "forwarded automatically while driving; Ctrl+Alt+Del cannot be sent by anything.")
+        bar.addWidget(keys_button)
 
         picture_action = QAction("Picture...", self)
         picture_action.triggered.connect(self._open_picture)
@@ -492,7 +569,7 @@ class MainWindow(QMainWindow):
         self.capture.start(index, fourcc, width, height, fps)
         self.capture_button.setText("Stop card")
 
-    def _keep_raw(self, frame) -> None:
+    def _keep_raw(self, frame, captured_at=None) -> None:
         # Called on the capture thread with the untouched frame. Only a reference is kept and
         # only Measure reads it, so there is no copy on the hot path.
         self._raw_frame = frame
@@ -502,9 +579,16 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _drain_frames(self) -> None:
-        image = self.slot.take()
-        if image is not None:
-            self.view.show_image(image)
+        image, captured_at = self.slot.take()
+        if image is None:
+            return
+        self.view.show_image(image)
+        if captured_at is not None:
+            # Device to painted, which is what this app controls. It is not glass-to-glass: the
+            # card's own delay before the frame reaches USB cannot be seen from here, and is
+            # usually the larger half.
+            spent = (time.perf_counter() - captured_at) * 1000.0
+            self._pipeline_ms = spent if self._pipeline_ms is None else self._pipeline_ms * 0.9 + spent * 0.1
 
     def _on_capture_status(self, status: dict) -> None:
         state = status.get("state")
@@ -643,6 +727,35 @@ class MainWindow(QMainWindow):
             return
         link.send_pad(padwire.report(state, 0))
 
+    # --- the keys Windows keeps for itself ---
+
+    @staticmethod
+    def _is_release_chord(vk: int) -> bool:
+        # Q, so Ctrl+Alt+Shift+Q still reaches Qt and the user can always let go.
+        return vk == 0x51
+
+    def _reserved_key(self, name: str, us, down: bool) -> None:
+        """From the hook, on the GUI thread. Only the keys the shell would have eaten."""
+        if self.link is None or not self.link.up:
+            return
+        kind = protocol.MSG_KEYDOWN if down else protocol.MSG_KEYUP
+        self.link.send_input(protocol.key_msg(kind, name, us))
+        if down:
+            self.view.note_held(name)
+        else:
+            self.view.note_released(name)
+
+    def _send_chord(self, names) -> None:
+        """A whole chord, pressed in order and released in reverse."""
+        if self.link is None or not self.link.up:
+            self.statusBar().showMessage("connect to a PC first", 3000)
+            return
+        for name in names:
+            self.link.send_input(protocol.key_msg(protocol.MSG_KEYDOWN, name))
+        for name in reversed(names):
+            self.link.send_input(protocol.key_msg(protocol.MSG_KEYUP, name))
+        self.statusBar().showMessage(f"sent {' + '.join(names)}", 2500)
+
     # --- the clipboard (upstream Beamer's capability, section 3) ---
 
     def _send_clipboard(self) -> None:
@@ -768,6 +881,12 @@ class MainWindow(QMainWindow):
             name = link.peer_name or link.address
             self.status_link.setText(f"link: {link.state} {name}{rtt}")
 
+        if self._pipeline_ms is not None and self.capture.running:
+            stale = self.capture.dropped_stale
+            self.status_card.setText(
+                self.status_card.text() + f"  {self._pipeline_ms:.0f} ms"
+                + (f"  {stale} skipped" if stale else ""))
+
         if self.audio.running and self.audio.format:
             shape = self.audio.format
             overflows, underruns = self.audio.drops()
@@ -789,6 +908,7 @@ class MainWindow(QMainWindow):
                                     f"{'' if self.pad_attached else ' (attaching)'}")
 
     def closeEvent(self, event) -> None:
+        self.reserved_keys.remove()
         self.stop_driving()
         self.audio.stop()
         self.capture.stop()

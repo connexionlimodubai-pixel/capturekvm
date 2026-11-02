@@ -31,6 +31,11 @@ except AttributeError:
 PROBE_LIMIT = 8
 REOPEN_SECONDS = 1.5
 
+# How many already-queued frames to throw away before showing one. Media Foundation buffers, and
+# CAP_PROP_BUFFERSIZE=1 is a request the back end may ignore, so the depth is drained rather than
+# assumed. Bounded so a device producing faster than real time cannot spin this loop.
+MAX_DRAIN = 4
+
 # What to ask a card for, best first. A USB 2.0 grabber takes the first; a USB 3.0 one (MS2130 and
 # friends) takes it at 60.
 FORMAT_LADDER = (
@@ -172,6 +177,8 @@ class CaptureWorker:
         self.format = None
         self.measured_fps = 0.0
         self.frames = 0
+        self.dropped_stale = 0      # queued frames thrown away to show a newer one
+        self.drain = True
 
     def start(self, index: int, fourcc: str = "MJPG", width: int = 1920, height: int = 1080, fps: int = 30) -> None:
         self.stop()
@@ -218,12 +225,39 @@ class CaptureWorker:
                 break
         self._on_status({"state": "stopped", "index": index})
 
+    def _newest(self, capture, frame_interval: float):
+        """(ok, frame, stale) -- the freshest frame the device has, and how many were skipped.
+
+        `grab()` returns as soon as a frame is ready. When several are already queued each call
+        comes back almost instantly; once caught up, it blocks for roughly a frame interval. That
+        difference is the only signal available for how deep the queue is, so it is what this
+        reads: keep grabbing while it is cheap, then retrieve the last one.
+
+        Without it the picture is as old as the deepest buffer in the chain, which for a KVM is
+        the difference between usable and not."""
+        if not self.drain:
+            ok, frame = capture.read()
+            return ok, frame, 0
+
+        quick = max(0.001, frame_interval / 3.0)
+        stale = 0
+        while True:
+            started = time.monotonic()
+            if not capture.grab():
+                return False, None, stale
+            if time.monotonic() - started > quick or stale >= MAX_DRAIN:
+                break
+            stale += 1
+        ok, frame = capture.retrieve()
+        return ok, frame, stale
+
     def _pump(self, capture) -> None:
         misses = 0
         counted = 0
         window_started = time.monotonic()
         while not self._stop.is_set():
-            ok, frame = capture.read()
+            ok, frame, stale = self._newest(capture, 1.0 / max(1.0, self.measured_fps or 30.0))
+            self.dropped_stale += stale
             if not ok or frame is None:
                 misses += 1
                 # A handful of empty reads is a mode change or a lost HDMI signal; a run of them
@@ -238,6 +272,7 @@ class CaptureWorker:
             counted += 1
             if self.on_raw is not None:
                 self.on_raw(frame)
+            captured_at = time.perf_counter()
             picture = self.picture
             if picture is not None:
                 try:
@@ -245,7 +280,7 @@ class CaptureWorker:
                 except Exception:                           # noqa: BLE001 - never lose the picture
                     LOGGER.exception("post-processing failed; passing the frame through")
                     self.picture = None
-            self._on_frame(frame)
+            self._on_frame(frame, captured_at)
             now = time.monotonic()
             elapsed = now - window_started
             if elapsed >= 1.0:

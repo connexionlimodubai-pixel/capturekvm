@@ -88,7 +88,8 @@ can be sent as relative motion.
 | | |
 |---|---|
 | **F9** | start / stop driving |
-| **Ctrl+Alt+Shift+Q** | let go — the one chord that is never sent to the PC |
+| **Ctrl+Alt+Shift+Q** | let go — the one chord never sent to the PC, and never swallowed by the hook |
+| **Send key** | chords Windows will not deliver to a window: Win+D, Win+R, Alt+F4, Task Manager… |
 | **F11** | fullscreen |
 | clicking the picture | starts driving |
 
@@ -136,6 +137,17 @@ when you go over it. Levels alone — the fix most people need — is nearly fre
 Two view options sit there too: **smooth scaling** (on; turn it off only if you want a deliberate
 pixel-art look) and **1:1**, which resamples nothing at all and is as sharp as the card can be,
 at the cost of clipping when the window is smaller than the frame.
+
+### Latency
+
+The capture thread drains whatever Media Foundation has queued and shows only the newest frame.
+`CAP_PROP_BUFFERSIZE = 1` is a request the back end may ignore, so the depth is measured rather
+than trusted: `grab()` returns instantly when a frame is already waiting and blocks for about a
+frame interval once caught up, and that difference is what the loop reads.
+
+The status bar shows **device to painted** in milliseconds, plus how many queued frames were
+skipped. That is the part this app controls — it is not glass-to-glass, because the card's own
+delay before a frame reaches USB cannot be seen from software and is usually the larger half.
 
 ### Clipboard
 
@@ -232,8 +244,10 @@ answers it has nobody to read it and the take times out.
 
 ## Known limits
 
-- **Windows reserves some keys.** The Windows key, Alt+Tab, Ctrl+Alt+Delete and the secure desktop
-  never reach the app, so they cannot be sent. This is the same limit Beamer itself documents.
+- **Ctrl+Alt+Delete cannot be sent by anything** — it is the secure attention sequence, invisible
+  to hooks and unreachable by injection, on this side and the PC's. The Windows key, Alt+Tab and
+  Ctrl+Esc *are* forwarded now, through a `WH_KEYBOARD_LL` hook that sits below the shell; they
+  are swallowed locally while driving, so pressing Win opens the PC's Start menu, not this one's.
 - **Left/right Control and Alt** are not always distinguishable on Windows; the client falls back
   to the left-hand name.
 - The client **only initiates**. It declares its link port as 0, which is how Beamer marks a

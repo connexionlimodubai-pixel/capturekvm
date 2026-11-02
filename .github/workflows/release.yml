@@ -75,6 +75,12 @@ jobs:
         working-directory: beamer-vigem
         run: python -m unittest core.tests.test_gamepad core.tests.test_responder_gamepad
 
+      - name: Client unit tests
+        working-directory: windows
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -v
+
       - name: End-to-end check
         run: python tools/end_to_end_check.py
 
