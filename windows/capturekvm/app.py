@@ -485,6 +485,14 @@ class MainWindow(QMainWindow):
             "forwarded automatically while driving; Ctrl+Alt+Del cannot be sent by anything.")
         bar.addWidget(keys_button)
 
+        gaming_action = QAction("Gaming", self)
+        gaming_action.setToolTip(
+            "Frame rate over resolution, and no post-processing. On a USB 2.0 card 720p60 looks "
+            "far better in motion than 1080p30, and the picture pipeline costs up to 16 ms a "
+            "frame that a game would rather spend on being current.")
+        gaming_action.triggered.connect(self._gaming_preset)
+        bar.addAction(gaming_action)
+
         picture_action = QAction("Picture...", self)
         picture_action.triggered.connect(self._open_picture)
         bar.addAction(picture_action)
@@ -726,6 +734,40 @@ class MainWindow(QMainWindow):
         if not self.pad_attached:
             return
         link.send_pad(padwire.report(state, 0))
+
+    def _gaming_preset(self) -> None:
+        """Frame rate over resolution, processing off.
+
+        Two things matter in a game and neither is sharpness: how recent the picture is, and how
+        smooth it is. A USB 2.0 card cannot do both 1080p and 60, so this takes 60; and the
+        picture pipeline, which is worth it for reading text, is up to 16 ms a frame that would
+        otherwise go on being current."""
+        best = None
+        for index in range(self.format_box.count()):
+            label = self.format_box.itemText(index)
+            try:
+                size, fps = label.split()
+                width, height = (int(part) for part in size.split("x"))
+                rate = int(fps)
+            except ValueError:
+                continue
+            # Highest rate wins; resolution only breaks a tie.
+            key = (rate, width * height)
+            if best is None or key > best[0]:
+                best = (key, index)
+        if best is not None:
+            self.format_box.setCurrentIndex(best[1])
+
+        for key, value in process.DEFAULTS.items():
+            self.config.set_setting(key, value)
+        self.picture.update(**process.DEFAULTS)
+        self.config.set_setting("smooth_scaling", True)
+        self.capture.drain = True
+
+        chosen = self.format_box.currentText()
+        restart = "  Press Start card to apply." if self.capture.running else ""
+        self.statusBar().showMessage(
+            f"Gaming: {chosen}, processing off, newest frame only.{restart}", 8000)
 
     # --- the keys Windows keeps for itself ---
 

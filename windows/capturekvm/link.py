@@ -96,6 +96,7 @@ class BeamerLink:
         self.peer_accepts = False
         self.rtt_ms = None
         self.last_error = None
+        self.pad_coalesced = 0      # stale pad reports replaced before they went out
 
     # --- lifecycle ---
 
@@ -151,6 +152,20 @@ class BeamerLink:
         if padwire.CAP_GAMEPAD not in self.peer_caps:
             return
         with self._outbox_cv:
+            # Replace any queued report for the same pad instead of queueing behind it. A report
+            # is full state, not a delta, so the newest one says everything the older ones did --
+            # and sending them in turn would replay stick positions the player has already left,
+            # which is lag that persists rather than a frame that is simply late. Mouse moves are
+            # coalesced for the same reason; this is the pad's version.
+            pad = (msg.get("data") or {}).get("pad")
+            for index, queued in enumerate(self._outbox):
+                if (queued.get("type") == padwire.MSG_GAMEPAD
+                        and (queued.get("data") or {}).get("pad") == pad
+                        and "seq" not in (queued.get("data") or {})):
+                    self._outbox[index] = msg
+                    self._outbox_cv.notify()
+                    self.pad_coalesced += 1
+                    return
             self._outbox.append(msg)
             self._outbox_cv.notify()
 

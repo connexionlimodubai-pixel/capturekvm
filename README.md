@@ -113,6 +113,32 @@ going to find that checkbox, and so the app can tell you when it isn't working. 
 device list is shown when no USB audio input can be found, which is the usual symptom of a card
 whose audio the tablet hasn't claimed.
 
+### Gaming
+
+Press **Gaming** on the toolbar: it picks the highest frame rate on offer and turns the picture
+pipeline off. On a USB 2.0 card **720p60 beats 1080p30** in motion by a long way, and the
+corrections that are worth it for reading text cost up to 16 ms a frame a game would rather spend
+on being current.
+
+Two things in the input path were measurably wrong and are fixed:
+
+- **Pad reports are coalesced.** They were not, and mouse moves always were. A report is *full
+  state*, so a backlog of them replays stick positions you have already left — lag that persists
+  rather than a frame that is merely late. A queued report is now replaced by the newer one.
+- **The pad poller runs at the rate it asks for.** Windows' default scheduler tick is 15.6 ms, so
+  a poller asking for 8 ms actually ran at **64 Hz**. With a 1 ms tick requested while polling it
+  measures **117 Hz** — about 8 ms off the average age of every reading. The request is released
+  when polling stops, because it is global and costs power.
+
+The gamepad reaches the PC as a real virtual Xbox 360 pad through ViGEmBus, so games see an
+ordinary controller — including the Guide button. Stick and trigger values are passed through
+**unmodified**: the game applies its own deadzone, and a second one here would only make the
+sticks feel worse.
+
+What is still missing for gaming: **rumble** (it needs a message from the PC back to the client,
+which the protocol does not have yet) and **a second pad** for local co-op (the wire allows four;
+both ends only use pad 0).
+
 ### Picture quality
 
 Cheap HDMI grabbers hurt the picture in a few separate ways, and they need different answers.

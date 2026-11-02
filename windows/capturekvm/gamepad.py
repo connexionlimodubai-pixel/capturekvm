@@ -12,6 +12,7 @@ and a keepalive now and then, instead of a frame per poll.
 import ctypes
 import ctypes.util
 import logging
+import sys
 import threading
 import time
 
@@ -121,6 +122,7 @@ class PadPoller:
         self._stop = threading.Event()
         self._thread = None
         self.connected_slot = None
+        self._winmm = None
         self._packet = None
         self._last_sent = None
         self._last_sent_at = 0.0
@@ -129,15 +131,42 @@ class PadPoller:
     def available(self) -> bool:
         return self.xinput.available
 
+    def _raise_timer_resolution(self) -> None:
+        """Ask Windows for a 1 ms scheduler tick while polling.
+
+        Without it the default is 15.6 ms, so a poller asking for 8 ms actually runs at about
+        64 Hz -- measured, not assumed -- which halves the pad's sample rate and adds about 8 ms
+        to the average age of every reading. Released again in stop(), because it is a global
+        setting and holding it costs power.
+        """
+        if not sys.platform.startswith("win") or self._winmm is not None:
+            return
+        try:
+            winmm = ctypes.WinDLL("winmm")
+            if winmm.timeBeginPeriod(1) == 0:
+                self._winmm = winmm
+        except (OSError, AttributeError):
+            LOGGER.info("could not raise the timer resolution; the pad will poll more slowly")
+
+    def _release_timer_resolution(self) -> None:
+        winmm, self._winmm = self._winmm, None
+        if winmm is not None:
+            try:
+                winmm.timeEndPeriod(1)
+            except OSError:
+                pass
+
     def start(self) -> None:
         if self._thread is not None or not self.available:
             return
+        self._raise_timer_resolution()
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="pad-poller", daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 1.0) -> None:
         self._stop.set()
+        self._release_timer_resolution()
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout)

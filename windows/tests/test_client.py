@@ -183,6 +183,56 @@ class PadState(unittest.TestCase):
         self.assertEqual(data["seq"], 4)
 
 
+class PadCoalescing(unittest.TestCase):
+    """A queued pad report must be replaced, not queued behind.
+
+    A report is full state. Sending a backlog of them in turn replays stick positions the player
+    has already left, which is lag that persists instead of a frame that is merely late -- the
+    worst kind in a game, and the reason mouse moves have been coalesced all along.
+    """
+
+    def link(self):
+        from capturekvm.link import BeamerLink
+        peer = {"id": "AAECAwQFBgcICQoLDA0ODw", "token": "A" * 43, "host": "127.0.0.1",
+                "port": 24820, "name": "PC", "platform": "windows"}
+        made = BeamerLink(peer, bytes(range(1, 17)), "client")
+        made.state = "up"
+        made.peer_caps = (padwire.CAP_GAMEPAD,)
+        return made
+
+    def report(self, buttons, pad=0):
+        return padwire.report(padwire.PadState(buttons=buttons), pad)
+
+    def test_a_backlog_collapses_to_the_newest(self):
+        made = self.link()
+        for buttons in (padwire.BTN_A, padwire.BTN_B, padwire.BTN_X, padwire.BTN_Y):
+            made.send_pad(self.report(buttons))
+        self.assertEqual(len(made._outbox), 1)
+        self.assertEqual(made._outbox[0]["data"]["buttons"], padwire.BTN_Y)
+        self.assertEqual(made.pad_coalesced, 3)
+
+    def test_different_pads_do_not_collapse_into_each_other(self):
+        made = self.link()
+        made.send_pad(self.report(padwire.BTN_A, pad=0))
+        made.send_pad(self.report(padwire.BTN_B, pad=1))
+        self.assertEqual(len(made._outbox), 2)
+
+    def test_a_peer_without_the_capability_is_sent_nothing(self):
+        made = self.link()
+        made.peer_caps = ()
+        made.send_pad(self.report(padwire.BTN_A))
+        self.assertEqual(len(made._outbox), 0)
+
+    def test_other_messages_are_not_disturbed(self):
+        from core import protocol
+        made = self.link()
+        made.send_unsequenced(protocol.ping_msg(probe=1))
+        made.send_pad(self.report(padwire.BTN_A))
+        made.send_pad(self.report(padwire.BTN_B))
+        kinds = [m["type"] for m in made._outbox]
+        self.assertEqual(kinds, ["ping", "gamepad"])
+
+
 class Fourcc(unittest.TestCase):
     def test_a_fourcc_survives_the_round_trip(self):
         for text in ("MJPG", "YUY2", "NV12"):

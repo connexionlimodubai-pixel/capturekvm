@@ -125,7 +125,25 @@ class BeamerLink(
     /** A pad frame, dropped unless the PC advertised the capability. */
     fun sendPad(message: JSONObject) {
         if (!gamepadReady) return
-        synchronized(outboxLock) { outbox.addLast(message); outboxLock.notifyAll() }
+        synchronized(outboxLock) {
+            // Replace a queued report for the same pad rather than queueing behind it: a report
+            // is full state, so the newest says everything the older ones did, and sending them
+            // in turn replays stick positions the player has already left.
+            val pad = message.optJSONObject("data")?.optInt("pad", 0) ?: 0
+            val existing = outbox.indexOfFirst {
+                it.optString("type") == PadWire.MSG_REPORT &&
+                    (it.optJSONObject("data")?.optInt("pad", 0) ?: 0) == pad &&
+                    it.optJSONObject("data")?.has("seq") != true
+            }
+            if (existing >= 0) {
+                val kept = outbox.toMutableList()
+                kept[existing] = message
+                outbox.clear(); outbox.addAll(kept)
+            } else {
+                outbox.addLast(message)
+            }
+            outboxLock.notifyAll()
+        }
     }
 
     /**
