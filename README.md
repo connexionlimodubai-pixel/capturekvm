@@ -22,6 +22,29 @@ That split is the whole point: streaming video over Wi-Fi *and* sending input ba
 Wi-Fi gives you two sources of lag that interact. Here they are independent, and the one you feel
 most — the picture — is wired.
 
+## Download
+
+Built binaries are on the [Releases](https://github.com/connexionlimodubai-pixel/capturekvm/releases)
+page, not in the file tree — build output does not belong in a source repository.
+`.github/workflows/release.yml` builds and attaches them when a `v*` tag is pushed.
+
+| | |
+|---|---|
+| **Android** | `CaptureKVM-<tag>-android.apk` — sideload it. Debug-signed, so Android warns about an unknown source. |
+| **Windows** | `CaptureKVM-<tag>-windows-x64.zip` — unzip, run `CaptureKVM.exe`. Unsigned, so SmartScreen warns: *More info* then *Run anyway*. About 77 MB zipped. |
+
+Neither is any use on its own: both talk to `beamer-vigem/` running on the PC you want to watch.
+
+To build them yourself:
+
+```bash
+cd android && ./gradlew :app:assembleDebug
+```
+
+```bash
+cd windows && .venv\Scripts\pyinstaller.exe capturekvm.spec --noconfirm
+```
+
 ## What you need
 
 | | |

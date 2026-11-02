@@ -15,3 +15,7 @@ android/local.properties
 
 # Nothing here holds a pairing token: the Windows client keeps its config in
 # %APPDATA%\CaptureKVM and the Android one in app-private shared preferences.
+
+# PyInstaller output. Release binaries come from .github/workflows/release.yml, not from git.
+windows/build/
+windows/dist/

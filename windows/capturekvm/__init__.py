@@ -20,8 +20,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BEAMER_ROOT = PROJECT_ROOT / "beamer-vigem"
 
-if str(BEAMER_ROOT) not in sys.path:
+# Running from source, `core` is found by putting the subtree on the path. In a PyInstaller
+# build there is no subtree on disk -- `core` is frozen into the executable and already
+# importable -- and PROJECT_ROOT points at somewhere inside the bundle, so the path is added
+# only when it is really there.
+if BEAMER_ROOT.is_dir() and str(BEAMER_ROOT) not in sys.path:
     sys.path.insert(0, str(BEAMER_ROOT))
+
+FROZEN = getattr(sys, "frozen", False)
 
 __version__ = "0.1.0"
 

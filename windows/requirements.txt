@@ -5,8 +5,11 @@ PySide6-Essentials>=6.8
 # this is the same dependency upstream has.
 PyNaCl>=1.5
 
-# UVC capture through Media Foundation. The MSMF back end is what opens a capture card by index.
-opencv-python>=4.10
+# UVC capture through Media Foundation. The MSMF back end opens a capture card by index.
+# Headless because the GUI module (imshow and friends) is unused here and brings a second copy of
+# Qt alongside PySide6's -- two Qt runtimes in one process is a fight worth avoiding, and it is
+# about 20 MB of a packaged build.
+opencv-python-headless>=4.10
 numpy>=2.0
 
 # Renders a pairing QR. Optional today; kept so the pairing dialog can show one later.
@@ -15,3 +18,7 @@ segno>=1.6
 # The capture card's sound, played locally through PortAudio. Chosen over QtMultimedia, which
 # lives in PySide6-Addons: about 150 MB for this one feature, and without an explicit block size.
 sounddevice>=0.5
+
+# Packaging only; not needed to run from source.
+pyinstaller>=6.0
+pyinstaller-hooks-contrib>=2024.1

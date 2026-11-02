@@ -1,0 +1,131 @@
+name: release
+
+# Builds the two things a user actually downloads -- the Android APK and a packaged Windows
+# client -- and attaches them to a GitHub Release. Build outputs are not committed to the
+# repository; this is where they come from.
+#
+# Runs on a version tag, or by hand from the Actions tab.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Needed by `gh release create` in the publish job. Nothing else writes.
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Committed from Windows, so the executable bit does not survive.
+      - name: Make the wrapper executable
+        run: chmod +x android/gradlew
+
+      # The vectors are generated from beamer-vigem by the Python side; the Kotlin tests assert
+      # the transcription against them, which is the check that the two ends agree.
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+
+      - name: Build the APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon --console=plain
+
+      - name: Name it after the tag
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "out/CaptureKVM-${GITHUB_REF_NAME:-dev}-android.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/*.apk
+          if-no-files-found: error
+
+  windows:
+    name: Windows client
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r windows/requirements.txt
+
+      # The fork's own tests and the client against its real responder. Worth running here
+      # because a packaged build that starts but cannot link is worse than no build.
+      - name: Gamepad and responder tests
+        working-directory: beamer-vigem
+        run: python -m unittest core.tests.test_gamepad core.tests.test_responder_gamepad
+
+      - name: End-to-end check
+        run: python tools/end_to_end_check.py
+
+      - name: Package
+        working-directory: windows
+        run: pyinstaller capturekvm.spec --noconfirm --clean --log-level WARN
+
+      - name: Zip it
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "dev" }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Compress-Archive -Path windows/dist/CaptureKVM/* `
+            -DestinationPath "out/CaptureKVM-$tag-windows-x64.zip" -CompressionLevel Optimal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    # Only a tag makes a release; a manual run just leaves the artifacts on the run.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh assets
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "CaptureKVM $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "
+          **Android** — sideload the APK. It is debug-signed, so Android will warn about an unknown source.
+          Needs USB host (OTG) and Android 8.0+.
+
+          **Windows** — unzip and run \`CaptureKVM.exe\`. Unsigned, so SmartScreen will warn: More info, then Run anyway.
+
+          Both talk to the PC through \`beamer-vigem/\`, the Beamer fork in this repository. Install that on
+          the PC you want to watch and control — see \`beamer-vigem/FORK.md\`. Gamepad input needs its
+          ViGEmBus driver; without it everything else still works.
+          "
