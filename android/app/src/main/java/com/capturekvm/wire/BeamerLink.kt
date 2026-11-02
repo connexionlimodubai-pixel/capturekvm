@@ -37,7 +37,10 @@ class BeamerLink(
         const val HANDSHAKE_MS = 5000
         const val READ_TIMEOUT_MS = 250
 
-        val CAPS = listOf("ping_rtt", PadWire.CAP_GAMEPAD)
+        // A capability is a promise to handle what arrives. `clipboard` is offered because the
+        // app sets Android's clipboard from it; `clipboard_image` is not, because it would then
+        // be sent PNGs it has no way to put anywhere.
+        val CAPS = listOf("ping_rtt", "clipboard", PadWire.CAP_GAMEPAD)
 
         const val STATE_DOWN = "down"
         const val STATE_DIALLING = "dialling"
@@ -123,6 +126,18 @@ class BeamerLink(
     fun sendPad(message: JSONObject) {
         if (!gamepadReady) return
         synchronized(outboxLock) { outbox.addLast(message); outboxLock.notifyAll() }
+    }
+
+    /**
+     * This device's clipboard, put at the front of the queue: WIRE.md section 3 has the owner send
+     * its clipboard after the taking `focus` and **before any input**, so a paste on the PC finds
+     * what was copied here.
+     */
+    fun sendClipboard(text: String): Boolean {
+        if (!isUp || !peerCaps.contains("clipboard")) return false
+        if (!Wire.clipboardFits(text)) return false
+        synchronized(outboxLock) { outbox.addFirst(Wire.clipboard(text)); outboxLock.notifyAll() }
+        return true
     }
 
     fun sendUnsequenced(message: JSONObject) {
@@ -322,6 +337,11 @@ class BeamerLink(
             Wire.MSG_PING -> {
                 val probe = message.optJSONObject("data")?.optInt("probe", 0) ?: 0
                 if (probe > 0) sendUnsequenced(Wire.ping(echo = probe))
+            }
+            Wire.MSG_CLIPBOARD -> {
+                val text = Wire.readClipboardText(message)
+                // Handed to the listener: Android's clipboard wants the main thread.
+                if (text != null) emit("clipboard", JSONObject().put("text", text))
             }
             Wire.MSG_SWITCH -> emit("switch", JSONObject())
         }

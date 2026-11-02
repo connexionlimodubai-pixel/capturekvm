@@ -95,6 +95,30 @@ def main() -> int:
                   17, 255, -32768, 32767, -1, 1),
               str(reports[0]) if reports else "no report")
 
+        # --- the clipboard, which is upstream Beamer's capability, not an addition ---
+        check("the PC offered clipboard and clipboard_image",
+              {"clipboard", "clipboard_image"} <= set(client.peer_caps), str(client.peer_caps))
+
+        # A 1x1 PNG, so the image path is exercised without a Qt image library here.
+        tiny_png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+            "890000000a49444154789c6300010000050001"
+            "0d0a2db40000000049454e44ae426082")
+        check("that PNG is one the wire accepts", protocol.png_fits(tiny_png))
+
+        sent = client.send_clipboard(text="copied on the tablet", png=tiny_png)
+        check("the client sent its clipboard", sent)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not machine.clipboard.set_calls:
+            time.sleep(0.05)
+        check("the PC's clipboard was set from it", bool(machine.clipboard.set_calls),
+              str(machine.clipboard.set_calls))
+        if machine.clipboard.set_calls:
+            text, image = machine.clipboard.set_calls[-1]
+            check("the text arrived intact", text == "copied on the tablet", repr(text))
+            check("the image arrived intact", image == tiny_png,
+                  f"{len(image) if image else 0} bytes vs {len(tiny_png)}")
+
         # --- the sequence/ack cycle ---
         check("acknowledgements gave a round-trip time", client.rtt_ms is not None, str(client.rtt_ms))
         check("nothing is left unacknowledged", not client._pending, str(client._pending))

@@ -55,6 +55,7 @@ Not redistributed here — resolved at build time.
 | [PySide6](https://doc.qt.io/qtforpython/) | LGPL-3.0 | Windows: the window |
 | [PyNaCl](https://github.com/pyca/pynacl) | Apache-2.0 (bundles libsodium — ISC) | Windows: X25519, ChaCha20-Poly1305, via the vendored core |
 | [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | Windows: UVC capture through Media Foundation |
+| [sounddevice](https://python-sounddevice.readthedocs.io/) (bundles PortAudio — MIT) | MIT | Windows: playing the capture card's audio |
 | AndroidX, Material Components, kotlinx-coroutines | Apache-2.0 | Android |
 
 LGPL note: PySide6 and libusb are both LGPL and both are used as separate shared libraries that the

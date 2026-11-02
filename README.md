@@ -72,11 +72,35 @@ can be sent as relative motion.
 It also lets go when the window loses focus, and every key and button still held is released on
 the way out, so nothing can be left stuck down on the PC.
 
-### Audio
+### Sound
 
-Deliberately not handled. The card's audio is a separate USB audio device, and Windows's own
-**Sound → Recording → [your card] → Listen to this device** routes it to your speakers with less
-delay than this process could add. On Android, plug headphones into the card if it has a jack.
+The card carries the PC's HDMI audio as a USB audio device, separate from its video. Press
+**Sound** and it plays here. Like the picture, **it never touches the network** — it arrives on the
+same cable, so the two stay in step and the link still carries only key presses.
+
+One callback copies input frames to output frames. Nothing is resampled, re-mixed or queued: if the
+card and your output disagree about sample rate, the stream refuses to open and says so, because
+silently absorbing a mismatch is how audio ends up a quarter-second behind the video. The status bar
+shows the rate, the round-trip latency PortAudio reports, and a drop count if any blocks are lost.
+
+Windows' own **Sound → Recording → [your card] → Listen to this device** does the same job in the
+kernel and will always beat this by a few milliseconds. The in-app route exists so it works without
+going to find that checkbox, and so the app can tell you when it isn't working. On Android the
+device list is shown when no USB audio input can be found, which is the usual symptom of a card
+whose audio the tablet hasn't claimed.
+
+### Clipboard
+
+Copy on either machine and it crosses when input does. This is Beamer's own capability, not an
+addition — the PC side already handled it; only the client ends were missing.
+
+Windows does text **and images**: a copied screenshot pastes into the PC as a PNG, and back. Android
+does text only, and therefore advertises `clipboard` but not `clipboard_image`, so the PC never
+sends it a picture it has nowhere to put. That is the capability system doing its job rather than a
+caveat.
+
+Per the wire, the clipboard is sent **after the take and before any input**, so a Control-V on the
+PC finds what you just copied rather than what was there before.
 
 ## Android client
 
@@ -166,8 +190,11 @@ answers it has nobody to read it and the take times out.
   to the left-hand name.
 - The client **only initiates**. It declares its link port as 0, which is how Beamer marks a
   machine that is never dialled, so the PC's own keyboard is never sent here.
-- **No clipboard** yet. The wire supports it and the vendored core can build the messages; nothing
-  is wired up.
+- **Clipboard images are Windows-only.** Android's clipboard carries pictures as content URIs and
+  converting one to a PNG is work this app doesn't do, so it advertises text only.
+- **Sound has never met a real capture card here.** The passthrough opens, picks devices and
+  reports failures correctly against this machine's inputs, but no card was attached to test the
+  one path that matters.
 - **One pad**, x360 only. No rumble (that would need a responder-to-initiator message). The PC side
   declines `ds4`, which is in the vocabulary but unimplemented.
 - **The pad path has never met a real ViGEmBus driver.** Both halves were written and tested

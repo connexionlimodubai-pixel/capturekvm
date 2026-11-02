@@ -58,11 +58,13 @@ object Wire {
     const val MSG_MOUSEUP = "mouseup"
     const val MSG_SCROLL = "scroll"
     const val MSG_TEXT = "text"
+    const val MSG_CLIPBOARD = "clipboard"
 
     val INPUT_TYPES = setOf(MSG_KEYDOWN, MSG_KEYUP, MSG_MOUSEMOVE, MSG_MOUSEDOWN, MSG_MOUSEUP, MSG_SCROLL, MSG_TEXT)
 
     const val MOVE_MAX = 65535
     const val TEXT_MAX_BYTES = 4096
+    const val CLIPBOARD_MAX_BYTES = 256 * 1024
     const val MAX_NAME_CHARS = 48
 
     class WireError(message: String) : Exception(message)
@@ -356,6 +358,27 @@ object Wire {
         MSG_SCROLL,
         JSONObject().put("dy", dy).put("dx", dx).put("mode", mode),
     )
+
+    /**
+     * The clipboard. Text only: Android's clipboard carries images as content URIs, and turning
+     * one into a PNG is work this app does not do, so it never offers `clipboard_image` and so is
+     * never sent one. The wire allows either part to be absent (WIRE.md section 3).
+     */
+    fun clipboard(text: String): JSONObject =
+        message(MSG_CLIPBOARD, JSONObject().put("text", text))
+
+    /** The text a `clipboard` carries, or null when there is none or it is over the limit. */
+    fun readClipboardText(message: JSONObject): String? {
+        val data = message.optJSONObject("data") ?: return null
+        if (!data.has("text") || data.isNull("text")) return null
+        val text = data.optString("text")
+        if (text.isEmpty()) return null
+        return if (text.toByteArray(Charsets.UTF_8).size <= CLIPBOARD_MAX_BYTES) text else null
+    }
+
+    /** Whether `text` is short enough to send. */
+    fun clipboardFits(text: String): Boolean =
+        text.isNotEmpty() && text.toByteArray(Charsets.UTF_8).size <= CLIPBOARD_MAX_BYTES
 
     fun text(value: String): JSONObject {
         var body = value

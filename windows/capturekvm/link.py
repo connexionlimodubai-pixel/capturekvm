@@ -19,7 +19,7 @@ import time
 
 from core import protocol
 
-from . import WIRE_APP, padwire
+from . import WIRE_APP, clipboard, padwire
 
 LOGGER = logging.getLogger("capturekvm.link")
 
@@ -33,9 +33,13 @@ CONNECT_TIMEOUT = 1.0
 HANDSHAKE_SECONDS = 5.0
 READ_TIMEOUT = 0.25
 
-# What this app can be sent. It drives rather than listens, so the list is short; `ping_rtt` lets
-# the PC answer probes and CAP_GAMEPAD tells a ViGEmBus fork that pad frames are welcome here too.
-CAPS = ("ping_rtt", padwire.CAP_GAMEPAD)
+# What this app can be sent. `ping_rtt` lets the PC answer probes; `clipboard` and
+# `clipboard_image` ask it to send its clipboard back when input goes home, which it will not do
+# otherwise; CAP_GAMEPAD tells a ViGEmBus peer that pad frames are welcome.
+#
+# A capability here is a promise to handle what arrives, so nothing goes on this list that the app
+# would then drop: `clipboard_image` is here because `clipboard.write_local` decodes PNGs.
+CAPS = ("ping_rtt", "clipboard", "clipboard_image", padwire.CAP_GAMEPAD)
 
 STATE_DOWN = "down"
 STATE_DIALLING = "dialling"
@@ -154,6 +158,22 @@ class BeamerLink:
         with self._outbox_cv:
             self._outbox.append(dict(msg))
             self._outbox_cv.notify()
+
+    def send_clipboard(self, text=None, png=None) -> bool:
+        """This machine's clipboard, carrying only what the PC said it can take.
+
+        Jumped to the front of the queue: WIRE.md section 3 has the owner send its clipboard after
+        the taking `focus` and **before any input**, so a Control-V on the PC finds what was
+        copied here rather than whatever was there before."""
+        if not self.up:
+            return False
+        msg = clipboard.message_for(text=text, png=png, peer_caps=self.peer_caps)
+        if msg is None:
+            return False
+        with self._outbox_cv:
+            self._outbox.insert(0, msg)
+            self._outbox_cv.notify()
+        return True
 
     # --- the worker ---
 
@@ -337,6 +357,13 @@ class BeamerLink:
             probe = protocol.read_ping(message)
             if probe and probe.get("probe"):
                 self.send_unsequenced(protocol.ping_msg(echo=probe["probe"]))
+            return
+        if kind == protocol.MSG_CLIPBOARD:
+            read = protocol.read_clipboard(message)
+            if read is not None and (read["text"] or read["image"]):
+                # Handed to the listener rather than set here: Qt's clipboard belongs to the GUI
+                # thread and this is the reader's.
+                self._emit("clipboard", {"text": read["text"], "image": read["image"]})
             return
         if kind == protocol.MSG_SWITCH:
             # The PC wants to hand input on to a third machine. This app is not a chain, so the

@@ -1,5 +1,9 @@
 package com.capturekvm
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.os.Bundle
 import android.os.Handler
@@ -42,6 +46,10 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
 
     private enum class Mode { TOUCH, PAD }
 
+    private companion object {
+        const val REQUEST_AUDIO = 1001
+    }
+
     private lateinit var views: ActivityMainBinding
     private lateinit var store: PeerStore
 
@@ -51,6 +59,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     private var attached: UsbDevice? = null
 
     private var link: BeamerLink? = null
+    private val audio by lazy { AudioPassthrough(this) { text -> main.post { toast(text) } } }
     private var mode = Mode.TOUCH
     private var padAttached = false
 
@@ -76,6 +85,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         views.linkButton.setOnClickListener { toggleLink() }
         views.modeButton.setOnClickListener { toggleMode() }
         views.keyboardButton.setOnClickListener { toggleKeyboard() }
+        views.soundButton.setOnClickListener { toggleSound() }
 
         views.keyboardSink.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
 
@@ -178,6 +188,59 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         return sizes.maxWithOrNull(
             compareBy({ it.width.toLong() * it.height }, { it.fps })
         )
+    }
+
+    // --- the card's sound, played here ---
+
+    private fun toggleSound() {
+        if (audio.isRunning) {
+            audio.stop()
+            views.soundButton.setText(R.string.sound_on)
+            showStatus()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            // Android has no "record this USB device only" permission, so playing the card's
+            // sound needs the microphone one. Nothing is stored or sent; see the manifest.
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_AUDIO)
+            return
+        }
+        if (audio.start()) views.soundButton.setText(R.string.sound_off)
+        showStatus()
+    }
+
+    override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, granted: IntArray) {
+        super.onRequestPermissionsResult(code, permissions, granted)
+        if (code == REQUEST_AUDIO) {
+            if (granted.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                toggleSound()
+            } else {
+                toast("Without the microphone permission the card's sound cannot be played")
+            }
+        }
+    }
+
+    // --- the clipboard (upstream Beamer's capability) ---
+
+    private fun sendClipboard() {
+        val current = link ?: return
+        if (!current.isUp) return
+        val manager = getSystemService(ClipboardManager::class.java) ?: return
+        // Android 10 and later only let the focused app read the clipboard, which this is while
+        // it is driving; a null here is that rule, not an error.
+        val text = manager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        if (text.isNullOrEmpty()) return
+        if (current.sendClipboard(text)) linkText = "clipboard sent (${text.length} characters)"
+        showStatus()
+    }
+
+    private fun receiveClipboard(text: String) {
+        val manager = getSystemService(ClipboardManager::class.java) ?: return
+        runCatching { manager.setPrimaryClip(ClipData.newPlainText("CaptureKVM", text)) }
+            .onSuccess {
+                linkText = "clipboard from the PC (${text.length} characters)"
+                showStatus()
+            }
     }
 
     // --- pairing ---
@@ -296,11 +359,14 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                 linkText = "link $state"
                 if (state == BeamerLink.STATE_UP) {
                     attachPad()
+                    // Before any input, as WIRE.md section 3 asks.
+                    sendClipboard()
                 } else {
                     padAttached = false
                 }
                 showStatus()
             }
+            "clipboard" -> receiveClipboard(detail.optString("text"))
             "error" -> {
                 linkText = detail.optString("text")
                 showStatus()
@@ -440,6 +506,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         if (linkText.isNotEmpty()) pieces.add(linkText)
         link?.rttMs?.let { pieces.add("${it.toInt()} ms") }
         if (padAttached) pieces.add("pad -> PC")
+        audio.format?.let { pieces.add("sound $it") }
         views.status.text = pieces.joinToString("   ")
     }
 
@@ -448,6 +515,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     }
 
     override fun onDestroy() {
+        audio.stop()
         stopLink()
         super.onDestroy()
     }

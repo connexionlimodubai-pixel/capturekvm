@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from core import protocol
 
-from . import APP_NAME, __version__, capture, gamepad, inputmap, pair, padwire, store
+from . import APP_NAME, __version__, audio, capture, clipboard, gamepad, inputmap, pair, padwire, store
 from .link import STATE_UP, BeamerLink
 
 LOGGER = logging.getLogger("capturekvm.app")
@@ -122,6 +122,7 @@ class VideoView(QWidget):
         if self.driving:
             painter.setPen(Qt.red)
             painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
 
     # --- drive mode ---
 
@@ -315,6 +316,7 @@ class MainWindow(QMainWindow):
         self.view.show_text("pick a capture device, then Connect")
         self.setCentralWidget(self.view)
 
+        self.audio = audio.Passthrough(self._on_audio_status)
         self.pad_state = padwire.PadState()
         self.pad = gamepad.PadPoller(self._on_pad_report, self._on_pad_presence)
         self.pad_attached = False
@@ -326,6 +328,7 @@ class MainWindow(QMainWindow):
         self._build_status()
         self._refresh_devices()
         self._refresh_peers()
+        self._refresh_audio_devices()
 
         self.heartbeat = QTimer(self)
         self.heartbeat.timeout.connect(self._update_status)
@@ -391,6 +394,15 @@ class MainWindow(QMainWindow):
         self.addAction(fullscreen)
         bar.addAction(fullscreen)
 
+        bar.addSeparator()
+        self.audio_box = QComboBox()
+        self.audio_box.setMinimumWidth(190)
+        bar.addWidget(QLabel(" Sound "))
+        bar.addWidget(self.audio_box)
+        self.audio_button = QPushButton("Sound on")
+        self.audio_button.clicked.connect(self._toggle_audio)
+        bar.addWidget(self.audio_button)
+
         refresh = QAction("Rescan cards", self)
         refresh.triggered.connect(self._refresh_devices)
         bar.addAction(refresh)
@@ -399,7 +411,8 @@ class MainWindow(QMainWindow):
         self.status_card = QLabel("card: off")
         self.status_link = QLabel("link: off")
         self.status_pad = QLabel("pad: none")
-        for widget in (self.status_card, self.status_link, self.status_pad):
+        self.status_audio = QLabel("sound: off")
+        for widget in (self.status_card, self.status_link, self.status_pad, self.status_audio):
             self.statusBar().addWidget(widget)
             self.statusBar().addWidget(QLabel("  "))
         self.statusBar().addPermanentWidget(QLabel(f"release: Ctrl+Alt+Shift+Q  "))
@@ -555,10 +568,15 @@ class MainWindow(QMainWindow):
         elif kind == "state" and detail.get("state") == STATE_UP:
             if self.pad.connected_slot is not None:
                 self._attach_pad()
+            # Before any input, as WIRE.md section 3 asks, so a paste on the PC finds what was
+            # copied here. send_clipboard puts it at the front of the queue for the same reason.
+            self._send_clipboard()
         elif kind == "state" and detail.get("state") != STATE_UP:
             self.pad_attached = False
             if self.view.driving:
                 self.stop_driving()
+        elif kind == "clipboard":
+            self._receive_clipboard(detail)
         elif kind == "error":
             self.statusBar().showMessage(detail.get("text", ""), 6000)
 
@@ -591,6 +609,86 @@ class MainWindow(QMainWindow):
         if not self.pad_attached:
             return
         link.send_pad(padwire.report(state, 0))
+
+    # --- the clipboard (upstream Beamer's capability, section 3) ---
+
+    def _send_clipboard(self) -> None:
+        """This machine's clipboard to the PC. On the GUI thread: Qt's clipboard allows no other."""
+        if self.link is None or not self.link.up:
+            return
+        if not self.config.setting("clipboard_enabled"):
+            return
+        try:
+            text, png = clipboard.read_local()
+        except Exception:                                   # noqa: BLE001 - never break a take
+            LOGGER.exception("reading the clipboard")
+            return
+        if not self.config.setting("clipboard_images"):
+            png = None
+        if self.link.send_clipboard(text=text, png=png):
+            self.statusBar().showMessage(f"clipboard sent: {clipboard.describe(text, png)}", 4000)
+
+    def _receive_clipboard(self, detail: dict) -> None:
+        if not self.config.setting("clipboard_enabled"):
+            return
+        text, png = detail.get("text"), detail.get("image")
+        if not self.config.setting("clipboard_images"):
+            png = None
+        try:
+            if clipboard.write_local(text=text, png=png):
+                self.statusBar().showMessage(f"clipboard from the PC: {clipboard.describe(text, png)}", 4000)
+        except Exception:                                   # noqa: BLE001
+            LOGGER.exception("writing the clipboard")
+
+    # --- the card's sound, played here ---
+
+    def _refresh_audio_devices(self) -> None:
+        self.audio_box.clear()
+        if not audio.available():
+            self.audio_box.addItem("sounddevice unavailable", -1)
+            self.audio_button.setEnabled(False)
+            return
+        found = audio.input_devices()
+        for device in found:
+            mark = "* " if device["looks_like_a_card"] else "  "
+            self.audio_box.addItem(
+                f"{mark}{device['name'][:38]}  [{device['api'].replace('Windows ', '')}]",
+                device["index"])
+        if not found:
+            self.audio_box.addItem("no audio input found", -1)
+            self.audio_button.setEnabled(False)
+            return
+        wanted = self.config.setting("audio_input")
+        position = self.audio_box.findData(wanted)
+        self.audio_box.setCurrentIndex(position if position >= 0 else 0)
+        self.audio_box.setToolTip("* marks a device whose name looks like a capture card. "
+                                  "A name is a guess, not evidence -- pick the right one.")
+
+    def _toggle_audio(self) -> None:
+        if self.audio.running:
+            self.audio.stop()
+            self.config.set_setting("audio_enabled", False)
+            self.audio_button.setText("Sound on")
+            return
+        index = self.audio_box.currentData()
+        if index is None or index < 0:
+            QMessageBox.warning(self, APP_NAME, "No audio input was found for the card.")
+            return
+        output = self.config.setting("audio_output")
+        started = self.audio.start(
+            int(index),
+            None if output is None or output < 0 else int(output),
+            block_frames=int(self.config.setting("audio_block_frames") or 256),
+        )
+        if started:
+            self.config.set_setting("audio_input", int(index))
+            self.config.set_setting("audio_enabled", True)
+            self.audio_button.setText("Sound off")
+
+    def _on_audio_status(self, status: dict) -> None:
+        if status.get("state") == "failed":
+            text = status.get("text", "the card's audio would not open")
+            QTimer.singleShot(0, lambda: self.statusBar().showMessage(f"sound: {text}", 8000))
 
     # --- drive mode ---
 
@@ -637,6 +735,16 @@ class MainWindow(QMainWindow):
             name = link.peer_name or link.address
             self.status_link.setText(f"link: {link.state} {name}{rtt}")
 
+        if self.audio.running and self.audio.format:
+            shape = self.audio.format
+            overflows, underruns = self.audio.drops()
+            drops = f"  {overflows + underruns} drops" if (overflows or underruns) else ""
+            self.status_audio.setText(
+                f"sound: {shape['sample_rate'] // 1000} kHz x{shape['channels']} "
+                f"~{shape['latency_ms']:.0f} ms{drops}")
+        else:
+            self.status_audio.setText("sound: off")
+
         if not self.pad.available:
             self.status_pad.setText("pad: XInput unavailable")
         elif self.pad.connected_slot is None:
@@ -649,6 +757,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.stop_driving()
+        self.audio.stop()
         self.capture.stop()
         self._stop_link()
         super().closeEvent(event)

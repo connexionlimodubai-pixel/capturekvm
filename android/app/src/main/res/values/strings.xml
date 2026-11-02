@@ -6,6 +6,8 @@
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="keyboard">Keyboard</string>
+    <string name="sound_on">Sound</string>
+    <string name="sound_off">Mute</string>
     <string name="mode_touch">Touchpad</string>
     <string name="mode_pad">Gamepad</string>
 

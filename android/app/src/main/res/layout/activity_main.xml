@@ -79,6 +79,15 @@
             android:text="@string/mode_touch" />
 
         <Button
+            android:id="@+id/soundButton"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#5BD1C7"
+            android:textSize="12sp"
+            android:text="@string/sound_on" />
+
+        <Button
             android:id="@+id/keyboardButton"
             style="?attr/borderlessButtonStyle"
             android:layout_width="wrap_content"

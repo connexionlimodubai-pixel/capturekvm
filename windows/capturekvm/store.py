@@ -30,6 +30,14 @@ DEFAULT_SETTINGS = {
     "scroll_lines_per_notch": 3.0,
     "mouse_scale": 1.0,
     "natural_scroll": False,
+    # Clipboard. Upstream Beamer's capability: the clipboard crosses at the moment of a switch.
+    "clipboard_enabled": True,
+    "clipboard_images": True,
+    # The card's sound, played locally. Never goes over the link.
+    "audio_enabled": False,
+    "audio_input": -1,            # -1 means "pick one that looks like a capture card"
+    "audio_output": -1,           # -1 means this machine's default output
+    "audio_block_frames": 256,
     # View
     "keep_aspect": True,
     "start_fullscreen": False,
