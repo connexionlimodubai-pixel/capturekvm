@@ -112,6 +112,31 @@ going to find that checkbox, and so the app can tell you when it isn't working. 
 device list is shown when no USB audio input can be found, which is the usual symptom of a card
 whose audio the tablet hasn't claimed.
 
+### Picture quality
+
+Cheap HDMI grabbers hurt the picture in a few separate ways, and they need different answers.
+**Picture…** on the toolbar has the controls; everything is off by default and costs nothing when
+off.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Black looks grey, or shadows are crushed | HDMI carries limited range (16–235); the card labels it full range (0–255) | **Measure**, then *Expand 16–235 to 0–255* |
+| Soft, blocky, fuzzy text | USB 2.0 cards fit 1080p30 down 480 Mbit/s with heavily compressed MJPEG | **Sharpen** — detail is gone for good, but what's left reads better |
+| Dull colour | compression hits chroma hardest | **Saturation** |
+| Jagged, aliased edges | *was a bug in this app* — fixed | nothing to do |
+
+**Measure** reads the frame on screen rather than guessing, and will say *"too little contrast to
+judge"* on a dark menu instead of inventing an answer. That matters: expanding the range of a
+picture that was never limited crushes it. Show something with real blacks and whites first.
+
+Measured on this machine at 1080p: levels **3.9 ms**, saturation **7.5 ms**, sharpen **6.9 ms**,
+all three **16.4 ms** against a 33 ms budget at 30 fps. The dialog shows the live cost and warns
+when you go over it. Levels alone — the fix most people need — is nearly free.
+
+Two view options sit there too: **smooth scaling** (on; turn it off only if you want a deliberate
+pixel-art look) and **1:1**, which resamples nothing at all and is as sharp as the card can be,
+at the cost of clipping when the window is smaller than the frame.
+
 ### Clipboard
 
 Copy on either machine and it crosses when input does. This is Beamer's own capability, not an

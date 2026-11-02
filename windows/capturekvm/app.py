@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
 
 from core import protocol
 
-from . import APP_NAME, __version__, audio, capture, clipboard, gamepad, inputmap, pair, padwire, store
+from . import APP_NAME, __version__, audio, capture, clipboard, gamepad, inputmap, pair, padwire, process, store
+from .picturedialog import PictureDialog
 from .link import STATE_UP, BeamerLink
 
 LOGGER = logging.getLogger("capturekvm.app")
@@ -104,13 +105,25 @@ class VideoView(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
+        # Without this Qt resamples with nearest-neighbour, which turns any window that is not
+        # exactly the frame's size into jagged, aliased video. It is the single biggest thing
+        # between the card and a picture that looks right.
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, self._settings.get("smooth_scaling", True))
         painter.fillRect(self.rect(), Qt.black)
         if self._pixmap is None:
             painter.setPen(Qt.gray)
             painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder or "no picture")
             return
         target = self.rect()
-        if self._settings.get("keep_aspect", True):
+        if self._settings.get("scale_mode", "fit") == "actual":
+            # 1:1. Nothing is resampled at all, which is as sharp as the card can look; the
+            # picture is centred and clipped if the window is smaller than it.
+            painter.drawPixmap(
+                target.x() + (target.width() - self._pixmap.width()) // 2,
+                target.y() + (target.height() - self._pixmap.height()) // 2,
+                self._pixmap,
+            )
+        elif self._settings.get("keep_aspect", True):
             scaled = self._pixmap.size().scaled(target.size(), Qt.KeepAspectRatio)
             painter.drawPixmap(
                 target.x() + (target.width() - scaled.width()) // 2,
@@ -308,9 +321,16 @@ class MainWindow(QMainWindow):
         self.link_events = LinkEvents()
         self.link_events.event.connect(self._on_link_event)
 
+        self.picture = process.Picture(**{
+            key: config.setting(key) for key in process.DEFAULTS if config.setting(key) is not None})
+        # The newest frame as the card sent it, before processing: Measure must read what the
+        # card is doing, not what the correction has already done to it.
+        self._raw_frame = None
         self.slot = FrameSlot()
         self.slot.arrived.connect(self._drain_frames)
-        self.capture = capture.CaptureWorker(self.slot.put, self._on_capture_status)
+        self.capture = capture.CaptureWorker(self.slot.put, self._on_capture_status,
+                                             picture=self.picture)
+        self.capture.on_raw = self._keep_raw
 
         self.view = VideoView(self._send_input, config.settings(), self)
         self.view.show_text("pick a capture device, then Connect")
@@ -387,6 +407,10 @@ class MainWindow(QMainWindow):
         self.drive_action.setShortcut(QKeySequence(Qt.Key_F9))
         self.drive_action.triggered.connect(self._toggle_drive)
         bar.addAction(self.drive_action)
+
+        picture_action = QAction("Picture...", self)
+        picture_action.triggered.connect(self._open_picture)
+        bar.addAction(picture_action)
 
         fullscreen = QAction("Fullscreen (F11)", self)
         fullscreen.setShortcut(QKeySequence(Qt.Key_F11))
@@ -467,6 +491,15 @@ class MainWindow(QMainWindow):
         self.config.set_setting("fps", fps)
         self.capture.start(index, fourcc, width, height, fps)
         self.capture_button.setText("Stop card")
+
+    def _keep_raw(self, frame) -> None:
+        # Called on the capture thread with the untouched frame. Only a reference is kept and
+        # only Measure reads it, so there is no copy on the hot path.
+        self._raw_frame = frame
+
+    def _open_picture(self) -> None:
+        dialog = PictureDialog(self.picture, self.config, lambda: self._raw_frame, self)
+        dialog.exec()
 
     def _drain_frames(self) -> None:
         image = self.slot.take()

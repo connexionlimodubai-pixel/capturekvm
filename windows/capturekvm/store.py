@@ -39,6 +39,16 @@ DEFAULT_SETTINGS = {
     "audio_output": -1,           # -1 means this machine's default output
     "audio_block_frames": 256,
     # View
+    "smooth_scaling": True,       # False gives nearest-neighbour, for a deliberate pixel look
+    "scale_mode": "fit",          # "fit" or "actual" (1:1, nothing resampled)
+    # Picture, applied to each frame on the capture thread. All off by default.
+    "range_mode": "none",
+    "brightness": 0,
+    "contrast": 1.0,
+    "gamma": 1.0,
+    "saturation": 1.0,
+    "sharpen": 0.0,
+    "sharpen_radius": 1.0,
     "keep_aspect": True,
     "start_fullscreen": False,
 }

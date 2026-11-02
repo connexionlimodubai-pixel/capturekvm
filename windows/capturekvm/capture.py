@@ -157,7 +157,12 @@ class CaptureWorker:
     and any failure. A card that is unplugged mid-run is reopened until `stop()`.
     """
 
-    def __init__(self, on_frame, on_status=None):
+    def __init__(self, on_frame, on_status=None, picture=None):
+        # `picture` is a process.Picture, applied here rather than on the GUI thread: at 1080p
+        # even a lookup table is milliseconds, and the window must not wait for it.
+        self.picture = picture
+        # Set by the app to see each frame as the card sent it, for measuring the range.
+        self.on_raw = None
         self._on_frame = on_frame
         self._on_status = on_status or (lambda status: None)
         self._stop = threading.Event()
@@ -231,6 +236,15 @@ class CaptureWorker:
             misses = 0
             self.frames += 1
             counted += 1
+            if self.on_raw is not None:
+                self.on_raw(frame)
+            picture = self.picture
+            if picture is not None:
+                try:
+                    frame = picture.apply(frame)
+                except Exception:                           # noqa: BLE001 - never lose the picture
+                    LOGGER.exception("post-processing failed; passing the frame through")
+                    self.picture = None
             self._on_frame(frame)
             now = time.monotonic()
             elapsed = now - window_started
