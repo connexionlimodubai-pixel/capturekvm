@@ -84,9 +84,14 @@ jobs:
       - name: End-to-end check
         run: python tools/end_to_end_check.py
 
+      # build.ps1 rather than pyinstaller on its own: it writes the "Change mode" command into
+      # the folder and then loads every module of both modes back out of the finished exe. A
+      # windowed exe missing a module shows no window and logs nothing, so a build that packaged
+      # cleanly can still be dead on arrival, and CI is the last place that gets to notice.
       - name: Package
+        shell: pwsh
         working-directory: windows
-        run: pyinstaller capturekvm.spec --noconfirm --clean --log-level WARN
+        run: ./build.ps1 -Python python
 
       - name: Zip it
         shell: pwsh
@@ -131,7 +136,16 @@ jobs:
 
           **Windows** — unzip and run \`CaptureKVM.exe\`. Unsigned, so SmartScreen will warn: More info, then Run anyway.
 
-          Both talk to the PC through \`beamer-vigem/\`, the Beamer fork in this repository. Install that on
-          the PC you want to watch and control — see \`beamer-vigem/FORK.md\`. Gamepad input needs its
-          ViGEmBus driver; without it everything else still works.
+          One exe is **both** ends of the link. It asks which this machine is the first time, and remembers:
+
+          - **receiver** — the machine the capture card is plugged into: shows the PC and drives it.
+          - **host** — the PC being watched: takes the keyboard, mouse and controller, the controller through
+            a virtual Xbox pad. This is the bundled Beamer fork's own window.
+
+          So put the same zip on both machines and answer differently. To change the answer: **Change mode**
+          beside the exe, *Mode…* in the receiver's toolbar, or \`CaptureKVM.exe --pick\`.
+
+          The APK is the receiver end only; it needs a PC running this exe in host mode, or stock Beamer
+          without the pad. Gamepad input needs the ViGEmBus driver on the PC; without it everything else
+          still works.
           "

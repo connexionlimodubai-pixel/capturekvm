@@ -1,0 +1,111 @@
+# Builds the one exe that is both ends of the link, then checks it can import both.
+#
+#   .\build.ps1
+#   .\build.ps1 -Zip            also writes dist\CaptureKVM-windows-x64.zip
+#
+# Uses .venv beside this script, creating it on first run. The import probe at the end is the
+# point of having a script rather than a bare pyinstaller call: a windowed exe cannot tell you it
+# is missing a module -- it just fails to start with no window and no message -- so every module
+# of both modes is loaded back out of the finished build and the outcome is read from a file.
+
+[CmdletBinding()]
+param(
+    [switch]$Zip,
+    # CI installs the requirements into the runner's own Python and has no .venv; `-Python python`
+    # builds with that instead of making a second environment to install them into again.
+    [string]$Python
+)
+
+$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
+
+# PyInstaller writes its progress to stderr. Windows PowerShell turns a native command's stderr
+# into error records, and with ErrorActionPreference Stop a perfectly good build then "fails" on
+# its first INFO line. Exit codes are checked by hand below instead.
+$PSNativeCommandUseErrorActionPreference = $false
+function Invoke-Native {
+    param([string]$Exe, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Exe @Arguments } finally { $ErrorActionPreference = $previous }
+}
+
+if ($Python) {
+    $python = $Python
+} else {
+    $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path $python)) {
+        Write-Host "Creating .venv ..." -ForegroundColor Cyan
+        Invoke-Native python -m venv .venv
+        Invoke-Native $python -m pip install --upgrade pip
+        Invoke-Native $python -m pip install -r requirements.txt
+    }
+}
+
+Write-Host "Building ..." -ForegroundColor Cyan
+Invoke-Native $python -m PyInstaller capturekvm.spec --noconfirm
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+
+$dist = Join-Path $PSScriptRoot "dist\CaptureKVM"
+$exe = Join-Path $dist "CaptureKVM.exe"
+if (-not (Test-Path $exe)) { throw "no exe at $exe" }
+
+# Host mode is Beamer's own window and has no button of ours in it, so a machine that answered
+# "host" and meant "receiver" needs a way back. Double-clicking this is it.
+@'
+@echo off
+rem Asks again which end of the link this machine is, and starts that mode.
+start "" "%~dp0CaptureKVM.exe" --pick
+'@ | Set-Content -LiteralPath (Join-Path $dist "Change mode.cmd") -Encoding ascii
+
+Write-Host "Probing both modes' imports inside the build ..." -ForegroundColor Cyan
+# Every module name the spec bundles, asked of the exe itself. --import-probe is Beamer's own
+# switch; capturekvm.launcher routes it to host mode, which is the half with more to go wrong.
+$modules = Invoke-Native $python -c @"
+import pathlib, sys
+root = pathlib.Path('..').resolve()
+win_app, core = root / 'beamer-vigem' / 'win_app', root / 'beamer-vigem' / 'core'
+names = ['kvm_bridge_win', 'capturekvm.launcher', 'capturekvm.app', 'capturekvm.link',
+         'capturekvm.capture', 'capturekvm.gamepad', 'capturekvm.audio', 'cv2', 'numpy',
+         'sounddevice', 'nacl', 'segno', 'win32com.client']
+names += sorted(p.stem for p in win_app.glob('*.py') if p.stem != 'kvm_bridge_win')
+names += sorted(f'core.{p.stem}' for p in core.glob('*.py') if p.stem != '__init__')
+print('\n'.join(names))
+"@
+if ($LASTEXITCODE -ne 0) { throw "could not list the modules to probe" }
+
+$names = @($modules -split "`r?`n" | Where-Object { $_ })
+if ($names.Count -lt 50) { throw "only $($names.Count) module names to probe; that cannot be right" }
+
+$report = Join-Path ([System.IO.Path]::GetTempPath()) "capturekvm-import-probe.txt"
+if (Test-Path $report) { Remove-Item -LiteralPath $report }
+# Start-Process -Wait, not the call operator: the exe is windowed, so it never attaches to this
+# console and `& $exe` returns the moment it is launched. The first version of this read the
+# report before the exe had written a line of it and called a 0-module probe a pass.
+$probe = Start-Process -FilePath $exe -ArgumentList (@("--import-probe", $report) + $names) `
+                       -PassThru -Wait
+$lines = if (Test-Path $report) { @(Get-Content -LiteralPath $report) } else { @() }
+if ($lines.Count -eq 0) { throw "the probe wrote nothing; the exe did not start" }
+
+$failed = $lines | Where-Object { $_ -like "FAIL *" }
+if ($failed) {
+    ($lines | Select-Object -Last 25) | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    throw "the build is missing modules it needs"
+}
+if ($probe.ExitCode -ne 0) { throw "the import probe failed with exit $($probe.ExitCode)" }
+# The probe stops at the first failure, so a short report is a failure too.
+if ($lines.Count -ne $names.Count) {
+    throw "the probe reported $($lines.Count) of $($names.Count) modules"
+}
+Write-Host "  ok  $($lines.Count) modules imported from the exe" -ForegroundColor Green
+
+if ($Zip) {
+    $archive = Join-Path $PSScriptRoot "dist\CaptureKVM-windows-x64.zip"
+    if (Test-Path $archive) { Remove-Item -LiteralPath $archive }
+    Write-Host "Zipping ..." -ForegroundColor Cyan
+    Compress-Archive -Path $dist -DestinationPath $archive
+    Write-Host ("  ok  {0} ({1:N1} MB)" -f $archive, ((Get-Item $archive).Length / 1MB)) -ForegroundColor Green
+}
+
+$size = (Get-ChildItem -LiteralPath $dist -Recurse -File | Measure-Object -Property Length -Sum).Sum
+Write-Host ("Done. {0} ({1:N0} MB)" -f $dist, ($size / 1MB)) -ForegroundColor Green

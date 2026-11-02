@@ -1,5 +1,6 @@
-# The window. LGPL-3.0, used as shared libraries the user can replace.
-PySide6-Essentials>=6.8
+# The window. LGPL-3.0, used as shared libraries the user can replace. The floor is host
+# mode's: beamer-vigem/win_app/requirements-win.txt asks for 6.11.1.
+PySide6-Essentials>=6.11.1
 
 # X25519 and ChaCha20-Poly1305, via libsodium. The vendored Beamer core imports it directly, so
 # this is the same dependency upstream has.
@@ -11,6 +12,10 @@ PyNaCl>=1.5
 # about 20 MB of a packaged build.
 opencv-python-headless>=4.10
 numpy>=2.0
+
+# Host mode's scheduled sign-in task and its administrator relaunch, which read and write
+# Windows' own task and token APIs. Only the Beamer half of the exe uses it.
+pywin32>=306
 
 # Renders a pairing QR. Optional today; kept so the pairing dialog can show one later.
 segno>=1.6

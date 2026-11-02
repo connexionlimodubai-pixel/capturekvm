@@ -516,6 +516,11 @@ class MainWindow(QMainWindow):
         refresh.triggered.connect(self._refresh_devices)
         bar.addAction(refresh)
 
+        mode_action = QAction("Mode...", self)
+        mode_action.setToolTip("Start this machine as the PC being watched instead")
+        mode_action.triggered.connect(self._change_mode)
+        bar.addAction(mode_action)
+
     def _build_status(self) -> None:
         self.status_card = QLabel("card: off")
         self.status_link = QLabel("link: off")
@@ -585,6 +590,30 @@ class MainWindow(QMainWindow):
     def _open_picture(self) -> None:
         dialog = PictureDialog(self.picture, self.config, lambda: self._raw_frame, self)
         dialog.exec()
+
+    def _change_mode(self) -> None:
+        """Ask the mode question again, in a new process.
+
+        This window cannot become the other mode: that mode builds its own QApplication, and
+        this one is already running. So the exe is started again with `--pick` and this one
+        closes behind it. Host mode has no button for this -- it is Beamer's window, not ours --
+        which is what the "Change mode" command beside the exe is for.
+        """
+        from . import launcher
+
+        answer = QMessageBox.question(
+            self, "Change mode",
+            "Close this window and ask again which end of the link this machine is?\n\n"
+            "Nothing paired is forgotten.",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            launcher.relaunch("--pick")
+        except OSError as exc:
+            QMessageBox.warning(self, "Change mode", f"Could not start CaptureKVM again: {exc}")
+            return
+        self.close()
 
     def _drain_frames(self) -> None:
         image, captured_at = self.slot.take()

@@ -127,6 +127,24 @@ class Store:
             self._data["name"] = (value or _default_name())[: protocol.MAX_NAME_CHARS]
             self.save()
 
+    @property
+    def mode(self) -> str:
+        """Which end of the link this machine is: "host", "receiver", or "" for ask every time.
+
+        A property of the machine rather than a setting, so it sits beside the name and the
+        machine id instead of in `settings`: the settings dialog is the receiver's, and the mode
+        decides whether that dialog exists at all. `capturekvm.launcher` reads it before Qt
+        starts, and host mode reads nothing else from this file.
+        """
+        value = self._data.get("mode")
+        return value if value in ("host", "receiver") else ""
+
+    @mode.setter
+    def mode(self, value: str) -> None:
+        with self._lock:
+            self._data["mode"] = value if value in ("host", "receiver") else ""
+            self.save()
+
     # --- peers ---
 
     def peers(self) -> list:

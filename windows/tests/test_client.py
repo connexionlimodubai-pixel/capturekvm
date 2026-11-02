@@ -11,7 +11,10 @@ an ad-hoc script that no longer exists. These cases are that script, kept.
     cd windows && .venv\\Scripts\\python.exe -m unittest discover -s tests
 """
 
+import json
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,7 +24,7 @@ sys.path.insert(0, str(ROOT / "windows"))
 
 import numpy as np  # noqa: E402
 
-from capturekvm import capture, clipboard, discover, padwire, process  # noqa: E402
+from capturekvm import capture, clipboard, discover, launcher, padwire, process, store  # noqa: E402
 from core import pairing  # noqa: E402
 
 
@@ -242,6 +245,94 @@ class Fourcc(unittest.TestCase):
     def test_nonsense_reads_as_unknown(self):
         self.assertEqual(capture.fourcc_text(0), "?")
         self.assertEqual(capture.fourcc_text(None), "?")
+
+
+class ModeResolution(unittest.TestCase):
+    """One exe is both ends of the link, and `resolve` is the whole of how it decides which.
+
+    Worth pinning because two of these rules are not obvious from the UI. Beamer relaunches
+    itself for administrator mode and runs itself from the sign-in task as plain
+    `exe --hidden --relaunched`, with no --mode: if those stopped landing in host mode they
+    would meet the picker instead, at sign-in, with nobody looking. And an explicit --mode has
+    to beat that rule, or `--mode receiver` could never be tried on a machine set up as a host.
+    """
+
+    def resolve(self, *arguments, remembered=""):
+        return launcher.resolve(["CaptureKVM.exe", *arguments], remembered)
+
+    def test_nothing_known_asks(self):
+        self.assertEqual(self.resolve()[0], None)
+
+    def test_a_remembered_mode_is_used(self):
+        self.assertEqual(self.resolve(remembered="host")[0], launcher.HOST)
+        self.assertEqual(self.resolve(remembered="receiver")[0], launcher.RECEIVER)
+
+    def test_a_remembered_mode_that_is_not_one_asks(self):
+        self.assertEqual(self.resolve(remembered="sideways")[0], None)
+
+    def test_the_flag_beats_what_is_remembered(self):
+        self.assertEqual(self.resolve("--mode", "host", remembered="receiver")[0], launcher.HOST)
+        self.assertEqual(self.resolve("--mode=receiver", remembered="host")[0], launcher.RECEIVER)
+
+    def test_pick_asks_again_even_with_a_mode_remembered(self):
+        mode, _, pick = self.resolve("--pick", remembered="host")
+        self.assertIsNone(mode)
+        self.assertTrue(pick)
+
+    def test_beamers_own_launches_find_host_mode(self):
+        for arguments in (("--hidden",), ("--hidden", "--relaunched"),
+                          ("--config", r"C:\settings.json"), (r"--config=C:\settings.json",),
+                          ("--import-probe", "out.txt", "core"), ("--enable-autostart",),
+                          ("--uninstall-cleanup",), ("--set-admin-mode", "on")):
+            with self.subTest(arguments):
+                self.assertEqual(self.resolve(*arguments)[0], launcher.HOST)
+
+    def test_an_explicit_mode_beats_beamers_flags(self):
+        mode, argv, _ = self.resolve("--mode", "receiver", "--hidden")
+        self.assertEqual(mode, launcher.RECEIVER)
+        self.assertEqual(argv, ["CaptureKVM.exe", "--hidden"])
+
+    def test_our_flags_do_not_reach_the_mode_that_runs(self):
+        # Beamer parses its argv with argparse, which exits on an argument it does not know, and
+        # Qt reads argv too. Anything of ours left in there would take the app down with it.
+        _, argv, _ = self.resolve("--pick", "--mode", "host", "--hidden", "--config", "s.json")
+        self.assertEqual(argv, ["CaptureKVM.exe", "--hidden", "--config", "s.json"])
+
+    def test_a_mode_that_is_not_one_is_refused(self):
+        for arguments in (("--mode", "sideways"), ("--mode",), ("--mode=",)):
+            with self.subTest(arguments):
+                with self.assertRaises(ValueError):
+                    self.resolve(*arguments)
+
+
+class RememberedMode(unittest.TestCase):
+    def setUp(self):
+        self.file = Path(tempfile.mkdtemp()) / "config.json"
+        self.store = store.Store(self.file)
+
+    def tearDown(self):
+        shutil.rmtree(self.file.parent, ignore_errors=True)
+
+    def test_unset_means_ask(self):
+        self.assertEqual(self.store.mode, "")
+
+    def test_a_mode_survives_a_reload(self):
+        self.store.mode = "host"
+        self.assertEqual(store.Store(self.file).mode, "host")
+
+    def test_clearing_it_goes_back_to_asking(self):
+        self.store.mode = "receiver"
+        self.store.mode = ""
+        self.assertEqual(store.Store(self.file).mode, "")
+
+    def test_junk_in_the_file_is_not_trusted(self):
+        # Hand-edited or written by an older version: anything but the two names means ask.
+        self.file.write_text(json.dumps({"mode": "administrator"}), encoding="utf-8")
+        self.assertEqual(store.Store(self.file).mode, "")
+
+    def test_junk_cannot_be_stored(self):
+        self.store.mode = "sideways"
+        self.assertEqual(self.store.mode, "")
 
 
 if __name__ == "__main__":

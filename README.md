@@ -8,9 +8,9 @@ keyboard, mouse and **gamepad** — over [Beamer](https://github.com/kalkman-cod
   ┌───────────┐                   ┌─────────────┐                 ┌──────────────────┐
   │    PC     │ ── HDMI out ────▶ │ USB capture │ ──── UVC ─────▶ │ Windows laptop   │
   │           │                   │    card     │                 │   or Android     │
-  │  Beamer   │                   └─────────────┘                 │    tablet        │
-  │ (responder│                                                   │   (CaptureKVM)   │
-  │ + ViGEmBus)│◀───── Wi-Fi / LAN, Beamer wire v6, TCP 24820 ────│                  │
+  │ CaptureKVM│                   └─────────────┘                 │    tablet        │
+  │  "host"   │                                                   │ CaptureKVM, mode │
+  │ ViGEmBus  │◀───── Wi-Fi / LAN, Beamer wire v6, TCP 24820 ─────│    "receiver"    │
   └───────────┘        keyboard · mouse · pad reports only        └──────────────────┘
 ```
 
@@ -31,9 +31,10 @@ page, not in the file tree — build output does not belong in a source reposito
 | | |
 |---|---|
 | **Android** | `CaptureKVM-<tag>-android.apk` — sideload it. Debug-signed, so Android warns about an unknown source. |
-| **Windows** | `CaptureKVM-<tag>-windows-x64.zip` — unzip, run `CaptureKVM.exe`. Unsigned, so SmartScreen warns: *More info* then *Run anyway*. About 77 MB zipped. |
+| **Windows** | `CaptureKVM-<tag>-windows-x64.zip` — unzip, run `CaptureKVM.exe`. It asks which end of the link the machine is: see [One exe, either end](#one-exe-either-end). Unsigned, so SmartScreen warns: *More info* then *Run anyway*. About 80 MB zipped — both ends together cost 3 MB more than the receiver alone, because they share Qt. |
 
-Neither is any use on its own: both talk to `beamer-vigem/` running on the PC you want to watch.
+The APK is one end only: it needs a PC running the Windows exe in host mode, or stock Beamer
+without the pad. The Windows zip is **both** ends — the same exe goes on the PC and on the laptop.
 
 To build them yourself:
 
@@ -42,15 +43,43 @@ cd android && ./gradlew :app:assembleDebug
 ```
 
 ```bash
-cd windows && .venv\Scripts\pyinstaller.exe capturekvm.spec --noconfirm
+cd windows && .\build.ps1
 ```
+
+`build.ps1` loads every module of both modes back out of the finished exe before it calls the
+build a success. A windowed exe missing a module shows no window and says nothing, so there is no
+other way to find out short of double-clicking it; `.\smoke.ps1` does that part, starting the
+built exe in each mode and checking that a window with the right title appears.
+
+## One exe, either end
+
+One `CaptureKVM.exe` is both sides of the link. It asks once, per machine:
+
+| | |
+|---|---|
+| **receiver** | The machine the capture card is plugged into. Shows the PC's picture, and sends it the keyboard, mouse and controller. |
+| **host** | The PC being watched. Its HDMI goes out to the card and it takes the input back, the controller through a virtual Xbox pad. This mode is the Beamer fork's own window. |
+
+Tick *Always start in this mode* and it stops asking. To change the answer later: **Change mode**
+beside the exe, *Mode…* in the receiver's toolbar, or
+
+```bash
+CaptureKVM.exe --mode receiver    # skip the question
+CaptureKVM.exe --mode host
+CaptureKVM.exe --pick             # ask again, and forget the remembered answer
+```
+
+The mode is settled before Qt starts and only that half is imported, so a receiver never loads
+the virtual-pad stack and a host never loads OpenCV. `--hidden`, `--config` and Beamer's other
+arguments mean host mode on their own: Beamer relaunches itself with them for administrator mode
+and runs itself from the sign-in task, both with no `--mode` to go by.
 
 ## What you need
 
 | | |
 |---|---|
 | **A UVC capture card** | Any HDMI-to-USB grabber. The ~$5 MS2109 class does 1080p30 (MJPEG); an MS2130 does 1080p60 over USB 3.0. Both report USB class 14, which is all this app looks for. |
-| **On the PC** | [`beamer-vigem/`](beamer-vigem) in this repo — Beamer with the gamepad capability this project needs. Install that rather than stock Beamer; [`FORK.md`](beamer-vigem/FORK.md) is the three-step setup. Stock Beamer also works, without the pad. |
+| **On the PC** | The same `CaptureKVM.exe`, in **host** mode. It carries [`beamer-vigem/`](beamer-vigem) — Beamer with the gamepad capability this project needs — inside it; [`FORK.md`](beamer-vigem/FORK.md) covers installing that fork on its own instead. Stock Beamer also works, without the pad. |
 | **A second HDMI output** on the PC (or a splitter) if you want to keep using its own monitor. |
 | **Windows client** | Python 3.11+ |
 | **Android client** | Android 8.0+ with USB host (OTG). Most tablets; check yours supports USB host. |
@@ -66,10 +95,13 @@ python -m venv .venv
 ```
 
 ```bash
-.venv\Scripts\python.exe -m capturekvm
+.venv\Scripts\python.exe -m capturekvm --mode receiver
 ```
 
-Or just `windows\run.ps1`.
+Or `windows\run.ps1 --mode receiver`. Without a `--mode` it asks which end this machine is; the
+rest of this section is receiver mode. Host mode needs `pywin32`, which `requirements.txt` now
+installs, and is the fork's own window, documented in
+[`beamer-vigem/README.md`](beamer-vigem/README.md).
 
 1. **Card** — pick the capture device. The list is probed, so each entry shows the format that
    index actually opened with. Press *Rescan cards* after plugging one in.
@@ -299,8 +331,9 @@ answers it has nobody to read it and the take times out.
 - **Sound has never met a real capture card here.** The passthrough opens, picks devices and
   reports failures correctly against this machine's inputs, but no card was attached to test the
   one path that matters.
-- **One pad**, x360 only. No rumble (that would need a responder-to-initiator message). The PC side
-  declines `ds4`, which is in the vocabulary but unimplemented.
+- **One pad**, x360 only. Rumble does travel back (see *Gaming*), but a second pad for local
+  co-op does not: the wire allows four and both ends use pad 0. The PC side declines `ds4`,
+  which is in the vocabulary but unimplemented.
 - **The pad path has never met a real ViGEmBus driver.** Both halves were written and tested
   against each other here, but this machine has no driver installed, so
   `vigem_target_x360_update` has not actually been called. Everything up to that one function is
@@ -346,7 +379,11 @@ capturekvm/
 ├── beamer-vigem/            the PC's half, as a git subtree (its own history)
 ├── tools/make_vectors.py    generates the Kotlin test vectors from that core
 ├── tools/end_to_end_check.py  the client's link against the PC's real responder
+├── tools/mode_handoff_check.py  the picker handing the process over to a mode
+├── windows/build.ps1        build, then import every module back out of the exe
+├── windows/smoke.ps1        start the built exe in each mode and look for a window
 ├── windows/capturekvm/
+│   ├── launcher.py          ← which end is this machine, and run that half
 │   ├── capture.py           UVC capture through Media Foundation
 │   ├── link.py              the Beamer initiator
 │   ├── pair.py              the "pair by address" exchange

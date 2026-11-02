@@ -17,4 +17,4 @@ if (-not (Test-Path $python)) {
     & $python -m pip install -r requirements.txt
 }
 
-& $python -m capturekvm
+& $python -m capturekvm @args
