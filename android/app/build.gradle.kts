@@ -12,8 +12,8 @@ android {
         // UVCAndroid needs USB host support; 26 is the floor its prebuilt library supports.
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
