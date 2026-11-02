@@ -7,13 +7,32 @@ was injected, and nothing may be left held when the owner goes away or the link 
 
 import unittest
 
-from core import gamepad, protocol
+from core import gamepad, protocol, receiver
 from core.tests.responder_harness import B, C, CAPS, Initiator, Machine, entry, wait_for
 
 PAD_CAPS = CAPS + [gamepad.CAP_GAMEPAD]
 
+# The real grace period is seconds, which is right for a Wi-Fi blip and wrong for a test suite.
+TEST_GRACE = 0.3
+
 
 class PadLink(unittest.TestCase):
+    def setUp(self):
+        self._grace = receiver.PAD_GRACE_SECONDS
+        receiver.PAD_GRACE_SECONDS = TEST_GRACE
+
+    def tearDown(self):
+        receiver.PAD_GRACE_SECONDS = self._grace
+
+    def assert_silenced(self, machine, pad=0):
+        """The half that must happen at once: nothing left held."""
+        self.assertTrue(
+            wait_for(lambda: ("pad", pad, 0, 0, 0, 0, 0, 0, 0) in machine.injector.seen()),
+            "the pad must be zeroed the moment its owner goes")
+
+    def assert_unplugged_after_grace(self, machine):
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {}, timeout=3.0),
+                        "and unplugged once the grace period passes")
     def machine(self, caps=PAD_CAPS, peers=None):
         peers = peers if peers is not None else [entry(B, "Peer B"), entry(C, "Peer C")]
         made = Machine(peers, caps=caps).start()
@@ -101,8 +120,8 @@ class PadLink(unittest.TestCase):
         self.assertTrue(wait_for(lambda: set(machine.injector.plugged()) == {0, 1}))
 
         link.let_go()
-        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {}),
-                        "a let-go must unplug the pads, or a held trigger stays held")
+        self.assert_silenced(machine)
+        self.assert_unplugged_after_grace(machine)
 
     def test_a_dropped_link_unplugs_every_pad(self):
         machine = self.machine()
@@ -113,8 +132,8 @@ class PadLink(unittest.TestCase):
         self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
 
         link.close()
-        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {}),
-                        "a lost link must unplug the pads")
+        self.assert_silenced(machine)
+        self.assert_unplugged_after_grace(machine)
 
     def test_another_machine_taking_over_unplugs_the_first_one_s_pads(self):
         machine = self.machine()
@@ -127,7 +146,8 @@ class PadLink(unittest.TestCase):
 
         # B hands this machine on to C, which is a let-go for B.
         first.let_go(target=C)
-        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {}))
+        self.assert_silenced(machine)
+        self.assert_unplugged_after_grace(machine)
 
     # --- rumble, which goes the other way ---
 
@@ -182,6 +202,63 @@ class PadLink(unittest.TestCase):
         self.assertIsNotNone(link.expect(gamepad.MSG_GAMEPAD_RUMBLE))
         self.assertIsNone(link.expect(gamepad.MSG_GAMEPAD_RUMBLE, timeout=0.5),
                           "a game setting the same value every frame must not flood the link")
+
+    # --- surviving a blip ---
+
+    def test_a_dropped_link_silences_the_pad_but_leaves_it_plugged_in(self):
+        """A Wi-Fi blip must not look to the game like the controller was unplugged.
+
+        The sticks and triggers go to zero at once, because none of that may outlive the owner;
+        the socket stays so a reconnect a second later finds the same device."""
+        machine = self.machine()
+        link, _ = self.initiator(machine)
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+        link.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        link.input(gamepad.report_msg(0, buttons=gamepad.BTN_A, rt=255))
+        self.assertTrue(wait_for(lambda: any(c[0] == "pad" for c in machine.injector.seen())))
+
+        receiver.PAD_GRACE_SECONDS = 30.0        # long enough that this test is about the blip
+        link.close()
+        self.assert_silenced(machine)
+        self.assertEqual(machine.injector.plugged(), {0: "x360"},
+                         "but it must stay plugged in for the grace period")
+
+    def test_coming_back_keeps_the_same_virtual_pad(self):
+        machine = self.machine()
+        first, _ = self.initiator(machine)
+        route = first.take(reach=[], resistance_px=0)
+        first.answer(route)
+        first.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        attaches = [c for c in machine.injector.seen() if c[0] == "pad_attach"]
+        receiver.PAD_GRACE_SECONDS = 30.0        # the reconnect must land inside the grace
+        first.close()
+
+        second, _ = self.initiator(machine)
+        route = second.take(reach=[], resistance_px=0)
+        second.answer(route)
+        second.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        self.assertNotIn(("pad_detach", 0), machine.injector.seen(),
+                         "reconnecting inside the grace period must not unplug and replug")
+        self.assertGreaterEqual(
+            len([c for c in machine.injector.seen() if c[0] == "pad_attach"]), len(attaches))
+
+    def test_stopping_the_responder_unplugs_at_once(self):
+        # Shutting down is not a blip; nothing is coming back, and a phantom controller must
+        # not be left in the device list.
+        machine = Machine([entry(B, "Peer B")], caps=PAD_CAPS).start()
+        link = Initiator(machine, peer=B)
+        self.addCleanup(link.close)
+        link.handshake(link.hello(caps=PAD_CAPS))
+        route = link.take(reach=[], resistance_px=0)
+        link.answer(route)
+        link.send(gamepad.attach_msg(0))
+        self.assertTrue(wait_for(lambda: machine.injector.plugged() == {0: "x360"}))
+        machine.stop()
+        self.assertEqual(machine.injector.plugged(), {})
 
     # --- what the driver says ---
 

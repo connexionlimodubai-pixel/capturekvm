@@ -40,6 +40,11 @@ SLOW_INJECTION_SECONDS = 0.25
 # A game may set the motors every frame. Relaying that verbatim would spend the link on buzzing,
 # so changes are rate-limited -- except a stop, which always goes.
 RUMBLE_MAX_HZ = 40.0
+# How long a virtual pad stays plugged in after its owner goes away. A dropped Wi-Fi link
+# redials within a couple of seconds, and unplugging in the meantime shows the game a
+# disconnected controller -- which in most games means a pause menu or a modal dialog, mid-fight.
+# The pad is zeroed at once either way, so nothing can be left held; only the socket lingers.
+PAD_GRACE_SECONDS = 6.0
 SLOW_INJECTION_LOG_INTERVAL_SECONDS = 1.0
 CLIPBOARD_RETRY_ATTEMPTS = 20
 CLIPBOARD_RETRY_SECONDS = 0.05
@@ -89,6 +94,42 @@ class InputScale:
             return dy, dx
         sign = -1.0 if self.reverse else 1.0
         return dy * self.scroll * sign, dx * self.scroll * sign
+
+
+def _pad_index(message):
+    """The pad a `gamepad` message names, or None when it is not one.
+
+    Read without validating the rest: this decides only whether two queued frames are about the
+    same pad. `gamepad.read_report` still judges the frame before anything is injected."""
+    if not isinstance(message, dict) or message.get("type") != gamepad.MSG_GAMEPAD:
+        return None
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    index = data.get("pad", 0)
+    return index if type(index) is int and 0 <= index < gamepad.MAX_PADS else None
+
+
+def _quiet_pads(injector, link) -> None:
+    """Zero every pad on `link`, without unplugging it.
+
+    This is the half that must happen immediately: a link lost mid-trigger must not leave the PC
+    holding it, which is the pad's version of the held-key rule in section 4. Unplugging is the
+    other half and can wait -- see PAD_GRACE_SECONDS."""
+    pads = getattr(link, "pads", None)
+    if not isinstance(pads, dict) or not pads:
+        return
+    report = getattr(injector, "gamepad_report", None)
+    listen = getattr(injector, "gamepad_set_rumble_callback", None)
+    for pad in sorted(pads):
+        try:
+            if listen is not None:
+                listen(pad, None)
+            if report is not None:
+                report(pad, 0, 0, 0, 0, 0, 0, 0)
+        except Exception:
+            LOGGER.exception("Could not quieten virtual pad %s", pad)
+        _tell_to_stop_rumbling(link, pad)
 
 
 def _unplug_pads(injector, link) -> None:
@@ -486,8 +527,23 @@ class _Link:
     def receive(self, message, size: int) -> bool:
         move = (protocol.read_input(message)
                 if isinstance(message, dict) and message.get("type") == protocol.MSG_MOUSEMOVE else None)
+        # A pad report is handled like a mouse move rather than like a key: it is idempotent full
+        # state, so a queued one can be replaced outright by a newer one, and the reader need not
+        # stall until it has been injected. At a pad's poll rate that stall serialises the whole
+        # input path -- no key or move can be read while a report is being injected.
+        pad = (_pad_index(message)
+               if isinstance(message, dict) and message.get("type") == gamepad.MSG_GAMEPAD else None)
         with self.cond:
             while not self.closed.is_set():
+                if pad is not None and self.inbox and _pad_index(self.inbox[-1][0]) == pad:
+                    # Acking the newer seq implicitly acks the one it replaces: an initiator
+                    # drops everything at or below the seq it is told about.
+                    added_size = size - self.inbox[-1][1]
+                    if self.inbox_bytes + added_size <= INBOX_BYTES:
+                        self.inbox[-1][0] = message
+                        self.inbox[-1][1] = size
+                        self.inbox_bytes += added_size
+                        return True
                 if move is not None and self.inbox:
                     merged = protocol.coalesce_mousemove(self.inbox[-1][0], message)
                     if merged is not None:
@@ -506,7 +562,7 @@ class _Link:
             self.inbox.append(item)
             self.inbox_bytes += size
             self.cond.notify_all()
-            if move is None:
+            if move is None and pad is None:
                 # Focus changes ownership. Finish every control record before reading beyond it,
                 # including the ownership check that precedes parsing a large clipboard frame.
                 while not item[3] and not self.closed.is_set():
@@ -627,6 +683,8 @@ class LinkResponder:
         # the check and the press. Never held while calling the app, or across a socket write.
         self._lock = threading.RLock()
         self._slots = HandshakeSlots()
+        # Deferred pad unplugs, by link: see PAD_GRACE_SECONDS.
+        self._pad_timers = {}
         self._drains = 0
         self._handshaking = 0               # threads for connections not yet authenticated
         self._links = {}                    # peer id: _Link
@@ -718,15 +776,28 @@ class LinkResponder:
         self._set_status(ServerState.WAITING, tr("Starting on port {port}").format(port=port))
         thread.start()
 
+    def _cancel_all_pad_grace(self) -> None:
+        for timer in list(self._pad_timers.values()):
+            timer.cancel()
+        self._pad_timers.clear()
+
     def stop(self) -> None:
         with self._lock:
             self._requested_running = False
             stop_event, listener, thread = self._stop_event, self._listener, self._thread
             connections = set(self._connections)
+            links = list(self._links.values())
             after = self._end_locked(self._owner) if self._owner is not None else []
             # Closed under the lock, so no take queued on one can be accepted after this.
-            for link in self._links.values():
+            for link in links:
                 link.close()
+            # Shutting down is not a blip: the grace period exists so a reconnect finds its pad,
+            # and nothing is going to reconnect now. A timer left running would also hold a
+            # virtual controller in the device list after the app has gone.
+            self._cancel_all_pad_grace()
+            injector = self._injector_module()
+            for link in links:
+                _unplug_pads(injector, link)
         self._run(after)
         if stop_event is not None:
             stop_event.set()
@@ -1228,6 +1299,8 @@ class LinkResponder:
             self._pad_detach_locked(link, read["pad"])
 
     def _pad_attach_locked(self, link: _Link, pad: int, kind: str) -> None:
+        # Back inside the grace period: keep the target the game is already looking at.
+        self._cancel_pad_grace(link)
         injector = self._injector_module()
         attach = getattr(injector, "gamepad_attach", None)
         if attach is None:
@@ -1261,6 +1334,34 @@ class LinkResponder:
             LOGGER.exception("A virtual pad for %s could not be unplugged", link.name)
         finally:
             link.pads.pop(pad, None)
+
+    def _pad_grace(self, link, injector) -> None:
+        """Unplug `link`'s pads once the grace period passes, unless it has come back by then.
+
+        Attaching again cancels this, and because the target is still there the attach is a
+        no-op: the game never sees the controller leave."""
+        pads = getattr(link, "pads", None)
+        if not isinstance(pads, dict) or not pads:
+            return
+        existing = self._pad_timers.pop(id(link), None)
+        if existing is not None:
+            existing.cancel()
+
+        def expire():
+            self._pad_timers.pop(id(link), None)
+            _unplug_pads(injector, link)
+            LOGGER.info("Unplugged the virtual pads for %s after the grace period",
+                        getattr(link, "name", "a peer"))
+
+        timer = threading.Timer(PAD_GRACE_SECONDS, expire)
+        timer.daemon = True
+        self._pad_timers[id(link)] = timer
+        timer.start()
+
+    def _cancel_pad_grace(self, link) -> None:
+        timer = self._pad_timers.pop(id(link), None)
+        if timer is not None:
+            timer.cancel()
 
     def _listen_for_rumble(self, link: _Link, pad: int) -> None:
         """Forward the game's rumble to whoever is holding the controller.
@@ -1581,10 +1682,11 @@ class LinkResponder:
         The virtual pads go too: `_serve` ends the ownership when a link closes, so unplugging
         them here covers a let-go, a take by another machine and a dropped link alike."""
         injector = self._injector_module()
-        # Through a module-level helper taking the injector, not a method on self: this function
-        # asks its responder for nothing but `_injector_module`, and tests stand a
-        # SimpleNamespace in for one.
-        _unplug_pads(injector, link)
+        # The pad is silenced now -- sticks centred, triggers released, rumble stopped -- because
+        # none of that may survive the owner going away. Unplugging is deferred, and scheduled by
+        # `_end_locked` rather than here: this function asks its responder for nothing but
+        # `_injector_module`, and upstream's tests stand a SimpleNamespace in for one.
+        _quiet_pads(injector, link)
         for (kind, name), us in reversed(list(link.held.items())):
             try:
                 if kind == "key":
@@ -1849,6 +1951,8 @@ class LinkResponder:
         self._disarm_locked()
         self._cancel_forced_locked()
         self._release_locked(link)
+        # Deferred here, where `self` is always a real responder.
+        self._pad_grace(link, self._injector_module())
         self._owner_events.append(None)
         after = []
         if let_go:

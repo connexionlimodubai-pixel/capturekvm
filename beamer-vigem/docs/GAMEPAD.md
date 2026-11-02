@@ -162,6 +162,18 @@ hands. Letting go, being taken over and losing the link all send a stop before u
    no phantom controller is left in the device list.
 4. **A report with no attach** plugs an `x360` in rather than dropping the frame: a reconnect can
    land a report first, and a pad already being held should work the moment it arrives.
+5. **Releasing is two halves.** The pad is *silenced* at once — sticks centred, triggers
+   released, rumble stopped — because none of that may outlive its owner. *Unplugging* waits
+   `PAD_GRACE_SECONDS`. A dropped Wi-Fi link redials within a couple of seconds, and unplugging
+   in the meantime shows the game a disconnected controller, which in most games means a pause
+   menu or a modal dialog. Attaching again inside the window cancels the unplug and finds the
+   same target, so the game never sees it leave. Stopping the responder unplugs immediately —
+   that is not a blip, and a phantom controller must not outlive the app.
+6. **A pad report is queued like a mouse move, not like a key.** It is idempotent full state, so
+   a queued report is replaced outright by a newer one for the same pad, and the reader is not
+   made to wait for it to be injected. Stalling the reader on every report serialises the whole
+   input path at a pad's poll rate. Acknowledging the newer `seq` implicitly acknowledges the one
+   it replaced, since an initiator drops everything at or below the number it is told.
 
 ## The driver
 

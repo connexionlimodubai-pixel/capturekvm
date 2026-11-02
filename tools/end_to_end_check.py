@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "beamer-vigem"))
 sys.path.insert(0, str(ROOT / "windows"))
 
-from core import gamepad, pairing, protocol  # noqa: E402
+from core import gamepad, pairing, protocol, receiver  # noqa: E402
 from core.tests.responder_harness import B, CAPS, HERE, TOKENS, Machine, entry  # noqa: E402
 
 from capturekvm import padwire  # noqa: E402
@@ -152,10 +152,19 @@ def main() -> int:
 
         client.stop()
         client = None
+        # The pad is silenced at once and unplugged only after the grace period, so a Wi-Fi blip
+        # does not show the game a disconnected controller. Both halves are checked.
         deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and machine.injector.plugged():
+        while time.monotonic() < deadline and ("pad", 0, 0, 0, 0, 0, 0, 0, 0) not in machine.injector.seen():
             time.sleep(0.05)
-        check("losing the link unplugs the pad", machine.injector.plugged() == {},
+        check("losing the link silences the pad at once",
+              ("pad", 0, 0, 0, 0, 0, 0, 0, 0) in machine.injector.seen())
+        check("but leaves it plugged in for the grace period",
+              machine.injector.plugged() == {0: "x360"}, str(machine.injector.plugged()))
+        deadline = time.monotonic() + receiver.PAD_GRACE_SECONDS + 3.0
+        while time.monotonic() < deadline and machine.injector.plugged():
+            time.sleep(0.1)
+        check("and unplugs it once the grace period passes", machine.injector.plugged() == {},
               str(machine.injector.plugged()))
         check("losing the link releases held keys and buttons",
               "release_all" in [call[0] for call in machine.injector.seen()])

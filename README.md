@@ -143,6 +143,15 @@ initiator, since the game runs on the PC.
 Anything that ends the link sends a **stop** first, and both clients also stop their motors when a
 link simply dies without saying anything: a pad left buzzing is the rumble version of a stuck key.
 
+**A Wi-Fi blip no longer disconnects your controller.** Losing the link silences the virtual pad
+instantly — sticks centred, triggers released — but leaves it plugged in for a few seconds. A
+reconnect inside that window finds the same device, so the game never shows a "controller
+disconnected" dialog mid-fight. Shutting down unplugs immediately; that isn't a blip.
+
+Pad reports are also queued on the PC like mouse moves rather than like keys: a newer report
+replaces a queued one, and the socket reader no longer stalls until each is injected — that stall
+serialised the whole input path at the pad's poll rate.
+
 What is still missing: **a second pad** for local co-op — the wire allows four, both ends use
 pad 0.
 
