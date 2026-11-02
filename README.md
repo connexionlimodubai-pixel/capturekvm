@@ -122,11 +122,18 @@ can be sent as relative motion.
 | **F9** | start / stop driving |
 | **Ctrl+Alt+Shift+Q** | let go — the one chord never sent to the PC, and never swallowed by the hook |
 | **Send key** | chords Windows will not deliver to a window: Win+D, Win+R, Alt+F4, Task Manager… |
-| **F11** | fullscreen |
+| **F11** | fullscreen: the toolbar and the status bar go away and the picture fills the screen |
+| **Esc** | leave fullscreen — but only when not driving, where Escape belongs to the PC |
 | clicking the picture | starts driving |
 
 It also lets go when the window loses focus, and every key and button still held is released on
 the way out, so nothing can be left stuck down on the PC.
+
+**Fullscreen is the picture and nothing else.** The toolbar and the status bar are hidden, and a
+pointer that stops moving disappears after two seconds. They do not come back on a pointer at the
+top edge the way a video player's controls do: the toolbar is docked in the window's layout, so
+showing it moves the picture down and rescales it, and a jump every time you grazed the top edge
+is worse than reaching for F11. Set *start_fullscreen* in the config file to open that way.
 
 ### Sound
 
@@ -254,9 +261,14 @@ permission, then **Pair** and **Connect** as above.
 | **Touchpad** mode | the picture is a trackpad: drag to move, tap to click, two fingers to scroll, long-press for right-click |
 | **Gamepad** mode | touch is ignored so a stray thumb cannot move the pointer mid-game; pad reports go to the PC |
 | **Keyboard** | opens the soft keyboard; a Bluetooth or USB keyboard works too and sends real key names |
+| **Fullscreen** | hides this app's own bar, leaving only the picture. Tap **☰** at the top left to bring it back; the choice is remembered, so a tablet kept for playing on opens straight to the picture |
 
 It is a trackpad, not a touchscreen, because the wire has no absolute-pointer message and the
 tablet has no idea where the PC's cursor currently is — so tapping where you want it cannot work.
+
+Android's own status and navigation bars are hidden the whole time, and asked to go again every
+time the app comes back to the front — opening the soft keyboard, a dialog, or switching away and
+back all bring them out otherwise, and nothing used to put them away again.
 
 ## Gamepad
 
@@ -380,6 +392,7 @@ capturekvm/
 ├── tools/make_vectors.py    generates the Kotlin test vectors from that core
 ├── tools/end_to_end_check.py  the client's link against the PC's real responder
 ├── tools/mode_handoff_check.py  the picker handing the process over to a mode
+├── tools/fullscreen_check.py  the real window asked whether fullscreen hides the chrome
 ├── windows/build.ps1        build, then import every module back out of the exe
 ├── windows/smoke.ps1        start the built exe in each mode and look for a window
 ├── windows/capturekvm/

@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     private val audio by lazy { AudioPassthrough(this) { text -> main.post { toast(text) } } }
     private var mode = Mode.TOUCH
     private var padAttached = false
+    private var barHidden = false
 
     private val main = Handler(Looper.getMainLooper())
     private val pad = PadReader { state -> sendPad(state) }
@@ -87,6 +88,11 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         views.modeButton.setOnClickListener { toggleMode() }
         views.keyboardButton.setOnClickListener { toggleKeyboard() }
         views.soundButton.setOnClickListener { toggleSound() }
+        views.fullscreenButton.setOnClickListener { setBarHidden(true) }
+        views.showBar.setOnClickListener { setBarHidden(false) }
+
+        barHidden = store.barHidden
+        applyBar()
 
         views.keyboardSink.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
 
@@ -480,6 +486,28 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         if (mode == Mode.TOUCH) pad.reset() else hideKeyboard()
     }
 
+    /**
+     * Fullscreen, on a screen that is already fullscreen.
+     *
+     * `goImmersive` only takes away Android's own bars; this app's bar sat over the top of the
+     * picture whatever happened, and there was no way to be rid of it. Hiding it leaves nothing
+     * but the card's picture, which is the point of a tablet propped up in front of you.
+     *
+     * The choice is remembered, so a device kept for playing on opens straight to the picture.
+     */
+    private fun setBarHidden(hidden: Boolean) {
+        barHidden = hidden
+        store.barHidden = hidden
+        applyBar()
+        goImmersive()
+        if (hidden) toast(getString(R.string.fullscreen_hint))
+    }
+
+    private fun applyBar() {
+        views.bar.visibility = if (barHidden) View.GONE else View.VISIBLE
+        views.showBar.visibility = if (barHidden) View.VISIBLE else View.GONE
+    }
+
     private fun toggleKeyboard() {
         val manager = getSystemService(InputMethodManager::class.java)
         if (views.keyboardSink.hasFocus()) {
@@ -495,6 +523,14 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         manager.hideSoftInputFromWindow(views.keyboardSink.windowToken, 0)
         views.keyboardSink.clearFocus()
         views.root.requestFocus()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Doing this in onCreate only is the usual Android mistake: the soft keyboard, a dialog
+        // and coming back from the launcher each bring Android's bars back, and nothing takes
+        // them away again. They are asked to go every time this window is the one in front.
+        if (hasFocus) goImmersive()
     }
 
     private fun goImmersive() {

@@ -10,6 +10,10 @@
     <string name="sound_off">Mute</string>
     <string name="mode_touch">Touchpad</string>
     <string name="mode_pad">Gamepad</string>
+    <string name="fullscreen">Fullscreen</string>
+    <string name="show_bar">☰</string>
+    <string name="show_bar_description">Show the toolbar</string>
+    <string name="fullscreen_hint">Toolbar hidden. Tap ☰ at the top left to bring it back.</string>
 
     <string name="pair_title">Pair with a PC</string>
     <string name="pair_hint">On the PC: open Beamer, choose Pair, and read off the six digits. The code lasts one minute and works once.</string>

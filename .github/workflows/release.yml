@@ -84,6 +84,11 @@ jobs:
       - name: End-to-end check
         run: python tools/end_to_end_check.py
 
+      # Builds the real window and asks it. Fullscreen that keeps the toolbar is not a crash and
+      # no unit test sees it; it just quietly stops being fullscreen, which is how it shipped.
+      - name: Fullscreen check
+        run: python tools/fullscreen_check.py
+
       # build.ps1 rather than pyinstaller on its own: it writes the "Change mode" command into
       # the folder and then loads every module of both modes back out of the finished exe. A
       # windowed exe missing a module shows no window and logs nothing, so a build that packaged

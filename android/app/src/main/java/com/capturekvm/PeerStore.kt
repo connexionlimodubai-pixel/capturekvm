@@ -67,6 +67,11 @@ class PeerStore(context: Context) {
         get() = preferences.getFloat(KEY_MOUSE_SCALE, 1.6f)
         set(value) = preferences.edit().putFloat(KEY_MOUSE_SCALE, value).apply()
 
+    /** Whether the toolbar is hidden, so a tablet kept for playing on opens straight to picture. */
+    var barHidden: Boolean
+        get() = preferences.getBoolean(KEY_BAR_HIDDEN, false)
+        set(value) = preferences.edit().putBoolean(KEY_BAR_HIDDEN, value).apply()
+
     private fun write(peers: List<Pairing.Peer>) {
         val array = JSONArray()
         peers.forEach { array.put(it.toJson()) }
@@ -84,5 +89,6 @@ class PeerStore(context: Context) {
         const val KEY_PEERS = "peers"
         const val KEY_SELECTED = "selected"
         const val KEY_MOUSE_SCALE = "mouse_scale"
+        const val KEY_BAR_HIDDEN = "bar_hidden"
     }
 }

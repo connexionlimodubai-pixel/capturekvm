@@ -408,6 +408,15 @@ class MainWindow(QMainWindow):
         self.reserved_keys = lowlevelkeys.ReservedKeys(
             self._reserved_key, lambda: self.view.driving, self._is_release_chord)
 
+        # Fullscreen's state. The pointer is polled rather than tracked through events, so that
+        # a cursor resting outside this window still counts as still (see _on_pointer_tick).
+        self._hint = None
+        self._hint_timer = None
+        self._pointer_at = QCursor.pos()
+        self._pointer_moved_at = time.monotonic()
+        self._watch_pointer = QTimer(self)
+        self._watch_pointer.timeout.connect(self._on_pointer_tick)
+
         self._build_toolbar()
         self._build_status()
         self._refresh_devices()
@@ -422,12 +431,12 @@ class MainWindow(QMainWindow):
             LOGGER.info("the Windows key and Alt+Tab cannot be forwarded: %s", self.reserved_keys.error)
 
         if config.setting("start_fullscreen"):
-            self.showFullScreen()
+            self._set_fullscreen(True)
 
     # --- chrome ---
 
     def _build_toolbar(self) -> None:
-        bar = QToolBar("Main", self)
+        bar = self.toolbar = QToolBar("Main", self)
         bar.setMovable(False)
         self.addToolBar(bar)
 
@@ -933,11 +942,87 @@ class MainWindow(QMainWindow):
         else:
             self.stop_driving()
 
+    # --- fullscreen -----------------------------------------------------------------------------
+    #
+    # Fullscreen means the picture and nothing else. Going fullscreen used to keep the toolbar and
+    # the status bar, which made it a bigger window rather than a fullscreen one.
+    #
+    # The toolbar does not come back on a pointer at the top edge, the way a video player's
+    # controls do. It is docked in the window's layout, so showing it again moves the picture down
+    # and rescales it: a jump every time the pointer grazed the top. Leaving fullscreen is the way
+    # back to it, and the hint on the way in says so.
+
+    CURSOR_IDLE_MS = 2000       # a pointer that has not moved for this long disappears
+
     def _toggle_fullscreen(self) -> None:
-        if self.isFullScreen():
-            self.showNormal()
-        else:
+        self._set_fullscreen(not self.isFullScreen())
+
+    def _set_fullscreen(self, on: bool) -> None:
+        if on:
             self.showFullScreen()
+            self._pointer_at = QCursor.pos()
+            self._pointer_moved_at = time.monotonic()
+            self._watch_pointer.start(150)
+            # After the resize, so it lands in the middle of the screen and not of the old window.
+            QTimer.singleShot(80, lambda: self._flash(
+                "Fullscreen — F9 to drive, F11 or Esc to leave"))
+        else:
+            self._watch_pointer.stop()
+            self.showNormal()
+            if not self.view.driving:
+                self.view.unsetCursor()
+        self._apply_chrome()
+
+    def _apply_chrome(self) -> None:
+        """The toolbar and the status bar are the chrome; fullscreen is the absence of it."""
+        show = not self.isFullScreen()
+        self.toolbar.setVisible(show)
+        self.statusBar().setVisible(show)
+
+    def _on_pointer_tick(self) -> None:
+        """Hide a pointer that is only sitting there. Polled rather than wired to mouse events:
+        a pointer resting outside this window still counts as not moving, and a widget gets no
+        event for that."""
+        if not self.isFullScreen() or self.view.driving:
+            # Driving pins the cursor to the centre and blanks it itself, so its position says
+            # nothing and its shape is not ours to set.
+            return
+        where = QCursor.pos()
+        if where != self._pointer_at:
+            self._pointer_at = where
+            self._pointer_moved_at = time.monotonic()
+            if self.view.cursor().shape() == Qt.BlankCursor:
+                self.view.unsetCursor()
+        elif ((time.monotonic() - self._pointer_moved_at) * 1000 > self.CURSOR_IDLE_MS
+                and self.view.cursor().shape() != Qt.BlankCursor):
+            self.view.setCursor(Qt.BlankCursor)
+
+    def _flash(self, text: str, ms: int = 3500) -> None:
+        """A line of text over the picture. The status bar cannot say anything in fullscreen,
+        which is exactly when there is something worth saying."""
+        if self._hint is None:
+            self._hint = QLabel(self.view)
+            self._hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self._hint.setStyleSheet(
+                "background: rgba(0, 0, 0, 180); color: #e8f5f3;"
+                "padding: 9px 16px; border-radius: 7px; font-size: 13px;")
+            self._hint_timer = QTimer(self)
+            self._hint_timer.setSingleShot(True)
+            self._hint_timer.timeout.connect(self._hint.hide)
+        self._hint.setText(text)
+        self._hint.adjustSize()
+        self._hint.move(max(0, (self.view.width() - self._hint.width()) // 2), 28)
+        self._hint.show()
+        self._hint.raise_()
+        self._hint_timer.start(ms)
+
+    def keyPressEvent(self, event) -> None:
+        """Escape leaves fullscreen -- but only when not driving, where every key belongs to the
+        PC and swallowing one here would be a key the game never sees."""
+        if (event.key() == Qt.Key_Escape and self.isFullScreen() and not self.view.driving):
+            self._set_fullscreen(False)
+            return
+        super().keyPressEvent(event)
 
     # --- status ---
 
