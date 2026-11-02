@@ -18,7 +18,14 @@ leans on are:
 | `core/receiver.py` | the responder; the client's end-to-end check runs the real one |
 
 - Upstream version: see `beamer-vigem/VERSION`
-- The subtree keeps its own git history, so `git log -- beamer-vigem` shows exactly what came from where.
+- The subtree came in with its history whole — 44 commits back to Beamer 1.2.0. Note that no
+  path-filtered `git log -- beamer-vigem` will show them: the imported commits hold those files at
+  the repository root, so path filtering cannot follow them across the import. Walk the merge's
+  second parent instead:
+
+  ```bash
+  git log --oneline 56be2eb^2      # the subtree-add merge
+  ```
 - `LICENSE` in this repository is upstream's GPL-3.0 text.
 
 The Windows app imports that package directly, so it is a derivative work and this whole project

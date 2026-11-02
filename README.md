@@ -179,7 +179,26 @@ answers it has nobody to read it and the take times out.
 
 ## Layout
 
-Two projects, side by side: this client, and the PC-side fork it talks to.
+One repository, two halves: the client you install on the laptop or tablet, and `beamer-vigem/` —
+the Beamer fork you install on the PC, carried as a **git subtree** so it keeps its own history.
+
+That means the protocol exists once. The client imports `beamer-vigem/core/` directly rather than a
+copy of it, so the two ends cannot drift apart; a wrong byte in a key derivation does not raise an
+error, it just stops the link working and tells you nothing.
+
+The subtree is not a snapshot — it merges both ways:
+
+```bash
+# take Beamer's upstream updates into beamer-vigem/
+git subtree pull --prefix=beamer-vigem beamer-upstream main
+```
+
+```bash
+# publish beamer-vigem/ back to the fork repo (only needed to send a PR upstream)
+git subtree push --prefix=beamer-vigem fork vigem-gamepad
+```
+
+
 
 ```
 beamer-vigem/                Beamer + the gamepad capability (install this on the PC)
