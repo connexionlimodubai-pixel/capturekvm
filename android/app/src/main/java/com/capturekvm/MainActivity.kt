@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.capturekvm.databinding.ActivityMainBinding
+import com.capturekvm.ui.GamepadView
 import com.capturekvm.ui.TouchpadView
 import com.capturekvm.wire.BeamerLink
 import com.capturekvm.wire.KeyNames
@@ -39,12 +40,20 @@ import org.json.JSONObject
  * straight to a surface, so what you see is as current as the card can make it. Only key presses,
  * pointer movement and pad reports travel, over the Beamer link to the PC.
  *
- * Two input modes, because one set of touches cannot mean two things: Touchpad sends mouse and
- * keyboard, Gamepad sends pad reports and leaves the touchscreen alone.
+ * Three input modes, because one set of touches cannot mean three things:
+ *
+ *  * **Touchpad** -- the picture is a trackpad, sending mouse and keyboard.
+ *  * **On-screen pad** -- a controller drawn over the picture ([com.capturekvm.ui.GamepadView]),
+ *    for a phone with nothing plugged into it.
+ *  * **Controller** -- a real pad read through Android's input events; the touchscreen is left
+ *    alone so a stray thumb cannot move the PC's pointer mid-game.
+ *
+ * The last two send the identical thing: a [PadWire.State] in XUSB units, into the same virtual
+ * Xbox pad on the PC. Only one is live at a time, so the two cannot fight over a button.
  */
 class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadView.Listener {
 
-    private enum class Mode { TOUCH, PAD }
+    private enum class Mode { TOUCH, ONSCREEN, PAD }
 
     private companion object {
         const val REQUEST_AUDIO = 1001
@@ -66,7 +75,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
 
     private val main = Handler(Looper.getMainLooper())
     private val pad = PadReader { state -> sendPad(state) }
-    private val rumbler = Rumbler()
+    private val rumbler = Rumbler(this)
 
     private var cardText = ""
     private var linkText = ""
@@ -90,9 +99,16 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         views.soundButton.setOnClickListener { toggleSound() }
         views.fullscreenButton.setOnClickListener { setBarHidden(true) }
         views.showBar.setOnClickListener { setBarHidden(false) }
+        views.startButton.setOnClickListener { primaryAction() }
+        views.homePairButton.setOnClickListener { askToPair() }
+
+        // The on-screen pad reaches the PC by exactly the route a real one does.
+        views.onscreenPad.listener = GamepadView.Listener { state -> sendPad(state) }
+        views.onscreenPad.opacity = store.padOpacity
 
         barHidden = store.barHidden
         applyBar()
+        applyMode()
 
         views.keyboardSink.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
 
@@ -323,6 +339,12 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         if (link != null) stopLink() else startLink()
     }
 
+    /** The home panel's one big button. With nothing paired there is nothing to connect to, so
+     *  it offers the step that is actually missing instead of a toast saying so. */
+    private fun primaryAction() {
+        if (store.selected() == null) askToPair() else toggleLink()
+    }
+
     private fun startLink() {
         val peer = store.selected()
         if (peer == null) {
@@ -342,6 +364,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         val current = link
         link = null
         pad.reset()
+        views.onscreenPad.reset()
         rumbler.stop()
         if (current != null) {
             if (padAttached) {
@@ -377,9 +400,10 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                 showStatus()
             }
             "rumble" -> {
-                // The pad in the user's hands, not the tablet: attach() follows whichever
-                // device PadReader last saw.
-                rumbler.attach(pad.deviceId)
+                // Whatever is in the user's hands. With a real pad that is the pad's own
+                // motors; with the on-screen one the phone is the pad, and Rumbler falls back
+                // to this device's vibrator when given no id.
+                rumbler.attach(if (mode == Mode.ONSCREEN) null else pad.deviceId)
                 rumbler.set(detail.optInt("large"), detail.optInt("small"))
             }
             "clipboard" -> receiveClipboard(detail.optString("text"))
@@ -395,7 +419,8 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     private fun attachPad() {
         val current = link ?: return
         if (!current.gamepadReady || padAttached) return
-        if (!PadReader.anyPadAttached()) return
+        // The on-screen pad is a pad, and there is no InputDevice to find for it.
+        if (mode != Mode.ONSCREEN && !PadReader.anyPadAttached()) return
         current.sendUnsequenced(PadWire.attach(0, PadWire.KIND_X360))
         padAttached = true
     }
@@ -478,12 +503,38 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     // --- chrome ---
 
     private fun toggleMode() {
-        mode = if (mode == Mode.TOUCH) Mode.PAD else Mode.TOUCH
-        views.modeButton.setText(if (mode == Mode.TOUCH) R.string.mode_touch else R.string.mode_pad)
-        // In pad mode the touch overlay gets out of the way, so a stray thumb cannot move the
-        // PC's pointer in the middle of a game.
+        mode = when (mode) {
+            Mode.TOUCH -> Mode.ONSCREEN
+            Mode.ONSCREEN -> Mode.PAD
+            Mode.PAD -> Mode.TOUCH
+        }
+        applyMode()
+        when (mode) {
+            Mode.ONSCREEN -> toast(getString(R.string.onscreen_hint))
+            Mode.PAD -> if (!PadReader.anyPadAttached()) toast(getString(R.string.no_controller))
+            Mode.TOUCH -> Unit
+        }
+    }
+
+    /**
+     * Show the one input surface this mode uses and silence the others.
+     *
+     * Both pads are reset on the way through rather than only the one being left: whichever was
+     * holding a button has to let go of it on the PC, and a mode change is exactly when a held
+     * button would otherwise be stranded.
+     */
+    private fun applyMode() {
+        views.modeButton.setText(when (mode) {
+            Mode.TOUCH -> R.string.mode_touch
+            Mode.ONSCREEN -> R.string.mode_onscreen
+            Mode.PAD -> R.string.mode_pad
+        })
         views.touchpad.visibility = if (mode == Mode.TOUCH) View.VISIBLE else View.GONE
-        if (mode == Mode.TOUCH) pad.reset() else hideKeyboard()
+        views.onscreenPad.visibility = if (mode == Mode.ONSCREEN) View.VISIBLE else View.GONE
+        pad.reset()
+        views.onscreenPad.reset()
+        if (mode != Mode.TOUCH) hideKeyboard()
+        if (mode == Mode.ONSCREEN) main.post { attachPad() }
     }
 
     /**
@@ -499,6 +550,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         barHidden = hidden
         store.barHidden = hidden
         applyBar()
+        showHome()
         goImmersive()
         if (hidden) toast(getString(R.string.fullscreen_hint))
     }
@@ -554,6 +606,52 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         if (padAttached) pieces.add("pad -> PC")
         audio.format?.let { pieces.add("sound $it") }
         views.status.text = pieces.joinToString("   ")
+        showHome()
+    }
+
+    /**
+     * The three things that have to be true before the PC can be driven, each on its own line.
+     *
+     * The bar's single run of status text says all of this already, but only to someone who
+     * knows how to read it; when nothing is working yet, what is wanted is which of the three
+     * steps is the one still missing.
+     */
+    private fun showHome() {
+        val peer = store.selected()
+        val current = link
+        val connected = current != null && current.isUp
+
+        dot(views.dotCard, cameraOpen)
+        views.rowCard.text = if (cameraOpen) cardText else getString(R.string.no_card)
+
+        dot(views.dotPeer, peer != null)
+        views.rowPeer.text = peer?.let { "Paired with ${it.name}" } ?: getString(R.string.no_peer)
+
+        dot(views.dotLink, connected, pending = current != null)
+        views.rowLink.text = when {
+            connected -> linkText.ifEmpty { "Connected" }
+            current != null -> linkText.ifEmpty { "Connecting…" }
+            else -> getString(R.string.link_off)
+        }
+
+        views.startButton.setText(when {
+            peer == null -> R.string.pair_a_pc
+            current != null -> R.string.disconnect
+            else -> R.string.connect
+        })
+        views.homePairButton.visibility = if (peer == null) View.GONE else View.VISIBLE
+
+        // Gone once there is a picture to watch, and gone in fullscreen, where the whole point
+        // is that nothing is drawn over the PC.
+        views.home.visibility = if (connected || barHidden) View.GONE else View.VISIBLE
+    }
+
+    private fun dot(view: android.widget.TextView, on: Boolean, pending: Boolean = false) {
+        view.setTextColor(getColor(when {
+            on -> R.color.ok
+            pending -> R.color.warn
+            else -> R.color.off
+        }))
     }
 
     private fun toast(text: String) {

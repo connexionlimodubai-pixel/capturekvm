@@ -256,15 +256,42 @@ A prebuilt debug APK is at `android/app/build/outputs/apk/debug/app-debug.apk`.
 Plug the card into the tablet (a powered OTG hub helps — grabbers draw real current), grant the USB
 permission, then **Pair** and **Connect** as above.
 
+The panel in the middle says which of the three things is still missing — a card, a paired PC, a
+link — with a dot each, and the one button under it does whatever the next step is. It goes away
+once the link is up, leaving the picture.
+
+**Mode** cycles the three ways of driving the PC. One set of touches cannot mean three things, so
+only one is live at a time:
+
 | Control | |
 |---|---|
 | **Touchpad** mode | the picture is a trackpad: drag to move, tap to click, two fingers to scroll, long-press for right-click |
-| **Gamepad** mode | touch is ignored so a stray thumb cannot move the pointer mid-game; pad reports go to the PC |
+| **On-screen pad** mode | a controller drawn over the picture — two sticks, a D-pad, A/B/X/Y, LB/LT/RB/RT and Back/Guide/Start — for a phone with nothing plugged into it |
+| **Controller** mode | a real pad, read through Android's input events; touch is ignored so a stray thumb cannot move the pointer mid-game |
 | **Keyboard** | opens the soft keyboard; a Bluetooth or USB keyboard works too and sends real key names |
 | **Fullscreen** | hides this app's own bar, leaving only the picture. Tap **☰** at the top left to bring it back; the choice is remembered, so a tablet kept for playing on opens straight to the picture |
 
 It is a trackpad, not a touchscreen, because the wire has no absolute-pointer message and the
 tablet has no idea where the PC's cursor currently is — so tapping where you want it cannot work.
+
+### The on-screen pad
+
+Nothing new goes on the wire for it. It builds the same `PadWire.State` in XUSB units that a real
+controller does, sends it down the same link, and lands in the same virtual Xbox pad on the PC —
+which cannot tell the two apart. Rumble comes back to the phone's own vibrator, since in this mode
+the phone is the pad.
+
+Sticks are analogue, measured from the centre of their circle and held at full lean if your thumb
+slides past the edge. The D-pad reads diagonals from its two axes crossing at once. **Triggers are
+all or nothing**: a touchscreen cannot say "half pulled" without giving up a slider's worth of
+room, and 255 is right for every game that treats LT and RT as buttons.
+
+The sticks sit in the bottom corners where thumbs rest, with the D-pad and the face buttons above
+them and the shoulders along the top — a real pad's geometry rather than everything crammed into
+reach. `PadLayout` holds that geometry and the arithmetic, with no Android type in it, so it can
+be unit-tested; `PadLayoutPreviewTest` draws it to an SVG under `android/app/build/pad-layout/`,
+because the one bug that got through the arithmetic — the A button drawn across the top of the
+right stick — was only ever going to be found by looking at it.
 
 Android's own status and navigation bars are hidden the whole time, and asked to go again every
 time the app comes back to the front — opening the soft keyboard, a dialog, or switching away and
@@ -272,7 +299,8 @@ back all bring them out otherwise, and nothing used to put them away again.
 
 ## Gamepad
 
-A pad plugged into the client appears on the PC as a virtual Xbox 360 controller.
+A pad plugged into the client appears on the PC as a virtual Xbox 360 controller — and so does
+the Android client's on-screen pad, which sends the identical reports.
 
 - **Windows** reads it through `XInputGetStateEx` (so the Guide button works).
 - **Android** reads it through `MotionEvent` axes and `KeyEvent` buttons, removes the stick's own
@@ -407,6 +435,8 @@ capturekvm/
 └── android/app/src/main/java/com/capturekvm/
     ├── wire/{Crypto,Wire,Pairing,BeamerLink,KeyNames,PadWire}.kt
     ├── MainActivity.kt      UVC preview + input
-    ├── PadReader.kt         Android pad to XUSB units
+    ├── PadReader.kt         a real pad to XUSB units
+    ├── ui/PadLayout.kt      ← where the on-screen pad's controls are, and what a touch means
+    ├── ui/GamepadView.kt    ← drawing it, and following fingers
     └── ui/TouchpadView.kt   the picture as a trackpad
 ```

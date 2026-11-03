@@ -1,19 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">CaptureKVM</string>
+    <string name="tagline">Watch your PC through a capture card, and drive it.</string>
 
     <string name="pair">Pair</string>
+    <string name="pair_a_pc">Pair with a PC…</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="keyboard">Keyboard</string>
+    <string name="keys">Keys</string>
     <string name="sound_on">Sound</string>
     <string name="sound_off">Mute</string>
+    <string name="fullscreen">Full</string>
+
+    <!-- The three input modes, cycled by one button. -->
     <string name="mode_touch">Touchpad</string>
-    <string name="mode_pad">Gamepad</string>
-    <string name="fullscreen">Fullscreen</string>
+    <string name="mode_onscreen">On-screen pad</string>
+    <string name="mode_pad">Controller</string>
+
     <string name="show_bar">☰</string>
     <string name="show_bar_description">Show the toolbar</string>
     <string name="fullscreen_hint">Toolbar hidden. Tap ☰ at the top left to bring it back.</string>
+    <string name="dot">●</string>
 
     <string name="pair_title">Pair with a PC</string>
     <string name="pair_hint">On the PC: open Beamer, choose Pair, and read off the six digits. The code lasts one minute and works once.</string>
@@ -22,5 +30,8 @@
 
     <string name="no_card">Plug the capture card in</string>
     <string name="no_peer">Not paired with any PC</string>
+    <string name="link_off">Not connected</string>
     <string name="waiting_signal">Waiting for a picture from the card</string>
+    <string name="onscreen_hint">On-screen pad. The controls send the same reports a real controller would.</string>
+    <string name="no_controller">No controller found — plug one in, or switch to the on-screen pad.</string>
 </resources>

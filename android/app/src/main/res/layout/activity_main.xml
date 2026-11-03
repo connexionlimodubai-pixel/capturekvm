@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  One screen, stacked over the picture. Order matters twice over: later children draw on top,
+  and Android offers them a touch first. So the picture is at the bottom, the input surfaces sit
+  over it, and everything you can press is above those.
+-->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
@@ -11,11 +16,19 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
-    <!-- Sits over the picture and turns touches into relative mouse movement. -->
+    <!-- Turns touches into relative mouse movement. Hidden in the two pad modes, so a stray
+         thumb cannot move the PC's pointer mid-game. -->
     <com.capturekvm.ui.TouchpadView
         android:id="@+id/touchpad"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
+
+    <!-- The controller drawn over the picture, for a phone with nothing plugged into it. -->
+    <com.capturekvm.ui.GamepadView
+        android:id="@+id/onscreenPad"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 
     <!-- Off-screen and one pixel: it exists only to hold focus so the soft keyboard opens and
          its key events reach the activity. -->
@@ -31,90 +44,179 @@
         android:autofillHints=""
         android:contentDescription="@string/keyboard" />
 
+    <!--
+      What to do next, while there is nothing to watch yet. Three things have to be true before
+      the PC can be driven — a card, a paired PC, a link — and each says so on its own line
+      rather than being buried in one run of status text. It goes away once the link is up,
+      leaving the picture.
+    -->
+    <LinearLayout
+        android:id="@+id/home"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/panel"
+        android:minWidth="320dp"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/text"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/tagline"
+            android:textColor="@color/text_dim"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/dotCard"
+                style="@style/StatusDot"
+                android:text="@string/dot" />
+
+            <TextView
+                android:id="@+id/rowCard"
+                style="@style/StatusRow"
+                android:text="@string/no_card" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/dotPeer"
+                style="@style/StatusDot"
+                android:text="@string/dot" />
+
+            <TextView
+                android:id="@+id/rowPeer"
+                style="@style/StatusRow"
+                android:text="@string/no_peer" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/dotLink"
+                style="@style/StatusDot"
+                android:text="@string/dot" />
+
+            <TextView
+                android:id="@+id/rowLink"
+                style="@style/StatusRow"
+                android:text="@string/link_off" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/primary_button"
+            android:stateListAnimator="@null"
+            android:text="@string/connect"
+            android:textAllCaps="false"
+            android:textColor="@color/on_accent"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/homePairButton"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/pair_a_pc"
+            android:textAllCaps="false"
+            android:textColor="@color/accent"
+            android:textSize="13sp" />
+    </LinearLayout>
+
     <LinearLayout
         android:id="@+id/bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
-        android:background="#B0000000"
+        android:layout_margin="8dp"
+        android:background="@drawable/bar_background"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="6dp">
+        android:paddingStart="12dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="4dp"
+        android:paddingBottom="4dp">
 
         <TextView
             android:id="@+id/status"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:ellipsize="end"
             android:maxLines="2"
-            android:textColor="#E0F2F1"
-            android:textSize="12sp"
+            android:textColor="@color/text_dim"
+            android:textSize="11sp"
             android:text="@string/no_card" />
 
         <Button
             android:id="@+id/pairButton"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#5BD1C7"
-            android:textSize="12sp"
+            style="@style/BarButton"
             android:text="@string/pair" />
 
         <Button
             android:id="@+id/linkButton"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#5BD1C7"
-            android:textSize="12sp"
+            style="@style/BarButton"
             android:text="@string/connect" />
 
         <Button
             android:id="@+id/modeButton"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#5BD1C7"
-            android:textSize="12sp"
+            style="@style/BarButton"
             android:text="@string/mode_touch" />
 
         <Button
             android:id="@+id/soundButton"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#5BD1C7"
-            android:textSize="12sp"
+            style="@style/BarButton"
             android:text="@string/sound_on" />
 
         <Button
             android:id="@+id/keyboardButton"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#5BD1C7"
-            android:textSize="12sp"
-            android:text="@string/keyboard" />
+            style="@style/BarButton"
+            android:text="@string/keys" />
 
         <Button
             android:id="@+id/fullscreenButton"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#5BD1C7"
-            android:textSize="12sp"
+            style="@style/BarButton"
             android:text="@string/fullscreen" />
     </LinearLayout>
 
-    <!-- The way back once the bar is hidden. Last in the FrameLayout, so it is drawn over the
-         picture and is offered the touch before the touchpad underneath it. -->
+    <!-- The way back once the bar is hidden. Last, so it is drawn over everything and is offered
+         the touch before the pad and the touchpad underneath it. -->
     <Button
         android:id="@+id/showBar"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
         android:layout_gravity="top|start"
         android:layout_margin="8dp"
-        android:background="#99000000"
+        android:background="@drawable/handle"
+        android:stateListAnimator="@null"
         android:insetLeft="0dp"
         android:insetTop="0dp"
         android:insetRight="0dp"
@@ -122,8 +224,8 @@
         android:minWidth="0dp"
         android:minHeight="0dp"
         android:padding="0dp"
-        android:textColor="#E0F2F1"
-        android:textSize="18sp"
+        android:textColor="@color/text"
+        android:textSize="16sp"
         android:text="@string/show_bar"
         android:contentDescription="@string/show_bar_description"
         android:visibility="gone" />

@@ -1,5 +1,6 @@
 package com.capturekvm
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.CombinedVibration
@@ -17,16 +18,19 @@ import android.view.InputDevice
  * own pair of motor speeds, 0 to 255: `large` is the low-frequency motor, `small` the
  * high-frequency one.
  *
- * The pad's own motors are used where Android exposes them, not the phone's. A controller
- * reports its vibrators through its `InputDevice`, and on API 31 and later a pad with two of
- * them can be driven as two, which is the difference between rumble and a buzz.
+ * The pad's own motors are used where Android exposes them. A controller reports its vibrators
+ * through its `InputDevice`, and on API 31 and later a pad with two of them can be driven as
+ * two, which is the difference between rumble and a buzz.
+ *
+ * The phone's own vibrator is the fallback, for the on-screen pad: there the phone *is* the pad,
+ * and the hands holding it are the ones the game is trying to reach.
  *
  * Effects are re-issued rather than held: `createOneShot` has a duration, and the PC sends a new
  * value only when it changes, so each effect outlasts the gap to the next one and a stop cancels
  * outright. Amplitude 0 is not a legal one-shot, so zero means cancel rather than a silent
  * effect -- which also makes "stop" the one thing that cannot be mistaken for anything else.
  */
-class Rumbler {
+class Rumbler(private val context: Context? = null) {
 
     companion object {
         private const val TAG = "capturekvm.rumble"
@@ -41,6 +45,7 @@ class Rumbler {
     }
 
     private var deviceId: Int? = null
+    private var configured = false
     private var manager: VibratorManager? = null
     private var single: Vibrator? = null
     private var pair: Pair<Vibrator, Vibrator>? = null
@@ -52,26 +57,50 @@ class Rumbler {
 
     /** Point it at the pad currently being used. Safe to call repeatedly with the same id. */
     fun attach(deviceId: Int?) {
-        if (deviceId == this.deviceId) return
+        // `configured` as well as the id: the first call may be attach(null) for the on-screen
+        // pad, and comparing ids alone would take that for "already set up" and never look for
+        // the phone's own vibrator.
+        if (configured && deviceId == this.deviceId) return
         stop()
         this.deviceId = deviceId
+        configured = true
         manager = null; single = null; pair = null
-        val device = deviceId?.let { InputDevice.getDevice(it) } ?: return
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val found = device.vibratorManager
-            val ids = found.vibratorIds
-            manager = found
-            if (ids.size >= 2) {
-                // Two motors: drive them as the two the game asked for.
-                pair = found.getVibrator(ids[0]) to found.getVibrator(ids[1])
+        val device = deviceId?.let { InputDevice.getDevice(it) }
+        if (device != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val found = device.vibratorManager
+                val ids = found.vibratorIds
+                // Only when it has one: an empty manager would look available and do nothing,
+                // and the phone's vibrator below would never be tried.
+                if (ids.isNotEmpty()) manager = found
+                if (ids.size >= 2) {
+                    // Two motors: drive them as the two the game asked for.
+                    pair = found.getVibrator(ids[0]) to found.getVibrator(ids[1])
+                }
+                Log.i(TAG, "pad $deviceId has ${ids.size} vibrator(s)")
+            } else {
+                @Suppress("DEPRECATION")
+                val legacy = device.vibrator
+                if (legacy != null && legacy.hasVibrator()) single = legacy
             }
-            Log.i(TAG, "pad $deviceId has ${ids.size} vibrator(s)")
+            if (available) return
+        }
+        useSystemVibrator()
+    }
+
+    /** No pad, or one with no motors: rumble this device instead. */
+    private fun useSystemVibrator() {
+        val host = context ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val found = host.getSystemService(VibratorManager::class.java) ?: return
+            if (found.defaultVibrator.hasVibrator()) manager = found
         } else {
             @Suppress("DEPRECATION")
-            val legacy = device.vibrator
+            val legacy = host.getSystemService(Vibrator::class.java)
             if (legacy != null && legacy.hasVibrator()) single = legacy
         }
+        Log.i(TAG, "rumbling this device: ${available}")
     }
 
     /** What the PC asked for, 0-255 each. */

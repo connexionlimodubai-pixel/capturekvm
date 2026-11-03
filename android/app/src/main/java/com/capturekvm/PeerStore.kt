@@ -72,6 +72,11 @@ class PeerStore(context: Context) {
         get() = preferences.getBoolean(KEY_BAR_HIDDEN, false)
         set(value) = preferences.edit().putBoolean(KEY_BAR_HIDDEN, value).apply()
 
+    /** How solid the on-screen pad looks over the picture. */
+    var padOpacity: Float
+        get() = preferences.getFloat(KEY_PAD_OPACITY, 0.42f)
+        set(value) = preferences.edit().putFloat(KEY_PAD_OPACITY, value.coerceIn(0.1f, 1f)).apply()
+
     private fun write(peers: List<Pairing.Peer>) {
         val array = JSONArray()
         peers.forEach { array.put(it.toJson()) }
@@ -90,5 +95,6 @@ class PeerStore(context: Context) {
         const val KEY_SELECTED = "selected"
         const val KEY_MOUSE_SCALE = "mouse_scale"
         const val KEY_BAR_HIDDEN = "bar_hidden"
+        const val KEY_PAD_OPACITY = "pad_opacity"
     }
 }

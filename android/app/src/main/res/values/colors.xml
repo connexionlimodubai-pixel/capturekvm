@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One place for the palette, so the panel, the bar and the pad overlay agree. Dark and
+     translucent throughout: everything here is drawn over a picture that must stay readable. -->
+<resources>
+    <color name="panel">#E6101619</color>
+    <color name="bar">#B3000000</color>
+    <color name="handle">#99000000</color>
+    <color name="accent">#5BD1C7</color>
+    <color name="accent_deep">#1E6F6A</color>
+    <color name="ok">#4CD07A</color>
+    <color name="off">#7A8C8A</color>
+    <color name="warn">#E8B04B</color>
+    <color name="text">#E8F3F2</color>
+    <color name="text_dim">#9FB3B0</color>
+    <color name="on_accent">#06201E</color>
+</resources>
