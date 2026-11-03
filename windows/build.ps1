@@ -42,6 +42,12 @@ if ($Python) {
     }
 }
 
+# ViGEmBus's client library, which host mode needs to plug a controller in. Fetched, not committed;
+# see tools/fetch_vigem_client.py for why it has to be here and where it comes from.
+Write-Host "Fetching ViGEmClient.dll ..." -ForegroundColor Cyan
+Invoke-Native $python ..\tools\fetch_vigem_client.py
+if ($LASTEXITCODE -ne 0) { throw "could not fetch ViGEmClient.dll" }
+
 Write-Host "Building ..." -ForegroundColor Cyan
 Invoke-Native $python -m PyInstaller capturekvm.spec --noconfirm
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
@@ -98,6 +104,16 @@ if ($lines.Count -ne $names.Count) {
     throw "the probe reported $($lines.Count) of $($names.Count) modules"
 }
 Write-Host "  ok  $($lines.Count) modules imported from the exe" -ForegroundColor Green
+
+# The import probe cannot see this one: host mode loads it through ctypes when a controller is
+# first plugged in. Its absence was invisible until a user's controller did nothing. So it is
+# checked by hand, in the folder host mode looks in, and against the hash it was fetched by.
+$client = Join-Path $dist "_internal\ViGEmClient.dll"
+if (-not (Test-Path $client)) { throw "ViGEmClient.dll is not in the build; host mode has no controller" }
+$wanted = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $PSScriptRoot "vendor\ViGEmClient.dll")).Hash
+$shipped = (Get-FileHash -Algorithm SHA256 -LiteralPath $client).Hash
+if ($shipped -ne $wanted) { throw "the bundled ViGEmClient.dll is not the one fetched" }
+Write-Host "  ok  ViGEmClient.dll is in the build, where host mode looks for it" -ForegroundColor Green
 
 if ($Zip) {
     $archive = Join-Path $PSScriptRoot "dist\CaptureKVM-windows-x64.zip"

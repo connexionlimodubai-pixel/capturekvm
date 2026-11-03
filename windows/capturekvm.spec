@@ -31,6 +31,15 @@ for needed in (BEAMER / "core" / "protocol.py", WIN_APP / "kvm_bridge_win.py"):
     if not needed.is_file():
         raise SystemExit(f"the beamer-vigem subtree is incomplete: {needed} is missing")
 
+# ViGEmBus's client library, which host mode loads to plug a virtual Xbox pad in. The driver is
+# Windows's; this half ships with each program, and up to 0.4.0 it did not ship with this one, so
+# host mode never offered the controller at all. Loaded through ctypes, so no analysis finds it and
+# no import probe misses it: hence a hard stop here rather than a quiet build without it.
+# tools/fetch_vigem_client.py puts it in place, and build.ps1 runs that first.
+VIGEM_CLIENT = HERE / "vendor" / "ViGEmClient.dll"
+if not VIGEM_CLIENT.is_file():
+    raise SystemExit(f"{VIGEM_CLIENT} is missing: run python tools/fetch_vigem_client.py first")
+
 # Host mode's modules and core's, by name: the same sets the fork's own build.spec names, and the
 # same sets the import probe loads back out of the exe. Globbed rather than listed so a new
 # module cannot be left out by drift here.
@@ -88,7 +97,8 @@ a = Analysis(
     # run time and for the same reason: the root holds the Mac app's theme.py, and with the root
     # first that one would answer `import theme` and host mode would die on `import AppKit`.
     pathex=[str(HERE), str(WIN_APP), str(BEAMER)],
-    binaries=[],
+    # Into _internal, which is sys._MEIPASS, one of the places vigem.py looks.
+    binaries=[(str(VIGEM_CLIENT), ".")],
     datas=DATAS,
     hiddenimports=CORE_MODULES + HOST_MODULES + INDIRECT,
     hookspath=[],

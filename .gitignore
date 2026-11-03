@@ -19,3 +19,5 @@ android/local.properties
 # PyInstaller output. Release binaries come from .github/workflows/release.yml, not from git.
 windows/build/
 windows/dist/
+# ViGEmClient.dll, fetched by tools/fetch_vigem_client.py at build time rather than committed.
+windows/vendor/

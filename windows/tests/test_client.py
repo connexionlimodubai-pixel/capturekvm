@@ -340,10 +340,16 @@ DSHOW = capture.cv2.CAP_DSHOW
 MSMF = capture.cv2.CAP_MSMF
 
 
+JPEG = capture.cv2.imencode(".jpg", np.full((8, 8, 3), 128, np.uint8))[1].reshape(1, -1)
+
+
 class FakeCamera:
-    """cv2.VideoCapture, for a PC described by `world`: (index, api) -> "reads", "opens", or
-    absent. "opens" is the failure that matters most here -- a device the API accepts and then
-    never gets a frame from."""
+    """cv2.VideoCapture, for a PC described by `world`: (index, api) -> a state, or absent.
+
+    "opens" is the failure that matters most for finding cards: a device the API accepts and then
+    never gets a frame from. "reads" is a working card whose driver ignores a request for undecoded
+    frames; "jpeg" honours it; "junk" half honours it and hands back bytes that are no picture.
+    """
 
     world = {}
     asked = []
@@ -352,14 +358,26 @@ class FakeCamera:
         self.key = (index, api)
         FakeCamera.asked.append(self.key)
         self.state = FakeCamera.world.get(self.key)
+        self.undecoded = False
+        self.settings = []
 
     def isOpened(self):
-        return self.state in ("opens", "reads")
+        return self.state in ("opens", "reads", "jpeg", "junk")
 
     def read(self):
-        if self.state == "reads":
+        if self.state in ("reads", "jpeg", "junk"):
+            if self.undecoded and self.state == "jpeg":
+                return True, JPEG.copy()
+            if self.undecoded and self.state == "junk":
+                return True, np.full((1, 64), 7, np.uint8)
             return True, np.zeros((4, 4, 3), np.uint8)
         return False, None
+
+    def grab(self):
+        return self.state in ("reads", "jpeg", "junk")
+
+    def retrieve(self):
+        return self.read()
 
     def get(self, prop):
         cv2 = capture.cv2
@@ -367,6 +385,9 @@ class FakeCamera:
                 cv2.CAP_PROP_FPS: 30.0, cv2.CAP_PROP_FOURCC: capture.fourcc_code("MJPG")}.get(prop, 0)
 
     def set(self, prop, value):
+        self.settings.append((prop, value))
+        if prop == capture.cv2.CAP_PROP_CONVERT_RGB:
+            self.undecoded = not value
         return True
 
     def release(self):
@@ -434,6 +455,68 @@ class CardDiscovery(unittest.TestCase):
         capture_, actual = self.negotiate({(1, DSHOW): "opens", (1, MSMF): "reads"}, None)
         self.assertIsNotNone(capture_)
         self.assertEqual((actual["backend"], actual["api"]), ("Media Foundation", MSMF))
+
+
+class DecodingAndApiChoice(unittest.TestCase):
+    """DirectShow's MJPG, decoded here instead of by Windows's MJPEG Decompressor filter and then
+    flipped from bottom-up RGB; and the switch that compares the two APIs on one card."""
+
+    def open(self, state, api, fourcc="MJPG"):
+        FakeCamera.world = {(0, api): state}
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+            feed = capture.open_device(0, fourcc, 1920, 1080, 30, api)
+            picture = feed.read() if feed else (False, None)
+        return feed, picture
+
+    def test_directshow_hands_over_compressed_frames_when_the_driver_agrees(self):
+        feed, (ok, image) = self.open("jpeg", DSHOW)
+        self.assertTrue(feed.jpeg)
+        self.assertTrue(ok)
+        self.assertEqual(image.shape, (8, 8, 3), "decoded here, into an ordinary picture")
+
+    def test_a_driver_that_ignores_the_request_is_read_as_before(self):
+        feed, (ok, image) = self.open("reads", DSHOW)
+        self.assertFalse(feed.jpeg)
+        self.assertEqual(image.shape, (4, 4, 3))
+
+    def test_a_driver_that_sends_junk_goes_back_to_decoding_itself(self):
+        # Half honouring the request is the case to fear: bytes that are neither a picture nor a
+        # JPEG would show nothing at all. The first frame decides, and the request is withdrawn.
+        feed, (ok, image) = self.open("junk", DSHOW)
+        self.assertFalse(feed.jpeg)
+        self.assertEqual(feed.capture.settings[-1], (capture.cv2.CAP_PROP_CONVERT_RGB, 1))
+        self.assertEqual(image.shape, (4, 4, 3))
+
+    def test_media_foundation_is_left_to_decode_for_itself(self):
+        # Its decoder may be the GPU's; nothing here would beat that.
+        feed, _ = self.open("jpeg", MSMF)
+        self.assertFalse(feed.jpeg)
+        self.assertNotIn(capture.cv2.CAP_PROP_CONVERT_RGB, [prop for prop, _ in feed.capture.settings])
+
+    def test_uncompressed_formats_are_never_asked_for_undecoded(self):
+        feed, _ = self.open("jpeg", DSHOW, fourcc="YUY2")
+        self.assertFalse(feed.jpeg)
+
+    def test_the_status_bar_is_told_who_decodes(self):
+        FakeCamera.world = {(0, DSHOW): "jpeg"}
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+            feed, actual = capture.negotiate(0, ("MJPG", 1920, 1080, 30), DSHOW)
+        self.assertEqual((actual["backend"], actual["decoded"]), ("DirectShow", "here"))
+
+    def test_draining_does_not_decode_the_frames_it_throws_away(self):
+        # grab() skips stale frames; only the one finally retrieved is worth 11 ms of decoding.
+        feed, _ = self.open("jpeg", DSHOW)
+        with unittest.mock.patch.object(capture.cv2, "imdecode", wraps=capture.cv2.imdecode) as decode:
+            for _ in range(3):
+                feed.grab()
+            feed.retrieve()
+        self.assertEqual(decode.call_count, 1)
+
+    def test_the_api_choice_narrows_the_search(self):
+        self.assertEqual([api for _, api in capture.backends_for("dshow")], [DSHOW])
+        self.assertEqual([api for _, api in capture.backends_for("msmf")], [MSMF])
+        self.assertEqual([api for _, api in capture.backends_for("auto")], [DSHOW, MSMF])
+        self.assertEqual(capture.backends_for("something old"), capture.BACKENDS)
 
 
 class EmptyCardList(unittest.TestCase):

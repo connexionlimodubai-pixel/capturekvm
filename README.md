@@ -113,11 +113,26 @@ installs, and is the fork's own window, documented in
 4. **Pair…** — type the PC's address and the six digits Beamer is showing. One minute, one use.
 5. **Connect**, then **Drive (F9)**.
 
-**If the card is not listed.** Each camera is tried through **DirectShow** first — what OBS, VLC
-and the card makers' own tools use — and then **Media Foundation**. Up to 0.4.0 only Media
-Foundation was tried, and cheap HDMI grabbers are the devices it most often refuses, so a card that
-showed a picture in every other app could be missing here. When the list is still empty, the
-picture area says which of the three causes it is, going by what Windows itself reports:
+**DirectShow or Media Foundation.** Windows has two camera APIs and the switch beside the card list
+picks between them. *Auto* tries **DirectShow** first — what OBS, VLC and the card makers' own tools
+use — and then **Media Foundation**, and takes whichever gets a picture from each card. The status
+bar names the API in use with the measured frame rate and delay, so the two can be compared on one
+card by switching, stopping and starting.
+
+DirectShow is not slower by design: OpenCV's DirectShow path keeps only the newest frame, with no
+queue to fall behind in. What it does add is decoding — left to itself it pushes each MJPG frame
+through Windows's old *MJPEG Decompressor* filter and then flips bottom-up RGB the right way up. So
+CaptureKVM asks DirectShow for the frames still compressed and decodes them itself with
+libjpeg-turbo (about 11 ms for a full 1080p frame on the PC this was written on), and only the frame
+that is shown gets decoded. The status bar says *decoded here* when that is happening; a driver that
+will not hand frames over compressed is read the ordinary way. The lag people usually blame on
+DirectShow is a card that fell back to uncompressed YUY2 — 1080p at five frames a second — and the
+status bar flags a rate well below the one asked for.
+
+**If the card is not listed.** Up to 0.4.0 only Media Foundation was tried, and cheap HDMI grabbers
+are the devices it most often refuses, so a card that showed a picture in every other app could be
+missing here. When the list is still empty, the picture area says which of the three causes it is,
+going by what Windows itself reports:
 
 | It says | What to do |
 |---|---|
@@ -408,6 +423,12 @@ answers it has nobody to read it and the take times out.
   against each other here, but this machine has no driver installed, so
   `vigem_target_x360_update` has not actually been called. Everything up to that one function is
   covered.
+- **Up to 0.4.0 the Windows zip had no `ViGEmClient.dll`,** so host mode could never plug a pad in
+  and the controller did nothing, however the driver was set up. ViGEmBus is two halves: the
+  driver, installed into Windows once, and the client library each program ships for itself — an
+  older Beamer fork on the same PC drove pads fine with its own copy. The build now fetches the
+  library (`tools/fetch_vigem_client.py`, pinned by SHA-256) and refuses to finish without it; the
+  import probe never could have caught it, because the library is loaded through `ctypes`.
 - The Android client was **built and unit-tested here but not run on a device** — no tablet and no
   capture card were attached while it was written.
 

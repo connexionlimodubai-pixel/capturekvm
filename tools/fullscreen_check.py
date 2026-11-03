@@ -58,7 +58,7 @@ def chrome_shown(window):
 def main() -> int:
     print("fullscreen: the real window, on Qt's offscreen platform\n")
 
-    client_app.DeviceScanner.scan = lambda self: None
+    client_app.DeviceScanner.scan = lambda self, *args, **kwargs: None
     lowlevelkeys.ReservedKeys.install = lambda self: False
 
     application = QApplication(sys.argv[:1])

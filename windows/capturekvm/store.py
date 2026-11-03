@@ -21,6 +21,7 @@ DEFAULT_SETTINGS = {
     # Capture
     "device_index": 0,
     "device_api": 0,              # the OpenCV back end the card was found through; 0 means either
+    "capture_api": "auto",        # which APIs to look through: "auto", "dshow" or "msmf"
     "width": 1920,
     "height": 1080,
     "fps": 30,

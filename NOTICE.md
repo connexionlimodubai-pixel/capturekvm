@@ -54,7 +54,8 @@ Not redistributed here — resolved at build time.
 | [Bouncy Castle](https://www.bouncycastle.org/) (`bcprov-jdk18on`) | MIT-style (Bouncy Castle Licence) | Android: X25519, ChaCha20-Poly1305 |
 | [PySide6](https://doc.qt.io/qtforpython/) | LGPL-3.0 | Windows: the window |
 | [PyNaCl](https://github.com/pyca/pynacl) | Apache-2.0 (bundles libsodium — ISC) | Windows: X25519, ChaCha20-Poly1305, via the vendored core |
-| [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | Windows: UVC capture through Media Foundation |
+| [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | Windows: UVC capture through Media Foundation and DirectShow |
+| [ViGEmClient](https://github.com/nefarius/ViGEmClient) (`ViGEmClient.dll`, x64, as shipped in [vgamepad](https://github.com/yannbouteiller/vgamepad) 0.2.0) | MIT | Windows host mode: plugging the virtual Xbox pad into the ViGEmBus driver. Fetched at build time by `tools/fetch_vigem_client.py`, pinned by SHA-256, not committed |
 | [sounddevice](https://python-sounddevice.readthedocs.io/) (bundles PortAudio — MIT) | MIT | Windows: playing the capture card's audio |
 | AndroidX, Material Components, kotlinx-coroutines | Apache-2.0 | Android |
 

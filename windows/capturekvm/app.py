@@ -283,10 +283,10 @@ class DeviceScanner(QObject):
     # refusing the camera -- the last two only matter when the first is empty, to say why.
     found = Signal(list, list, str)
 
-    def scan(self) -> None:
+    def scan(self, backends=capture.BACKENDS) -> None:
         def work():
             try:
-                devices = capture.list_devices()
+                devices = capture.list_devices(backends=backends)
                 names = capture.pnp_camera_names()
                 blocked = capture.camera_blocked() or ""
             except Exception:                               # noqa: BLE001 - report nothing found
@@ -452,6 +452,18 @@ class MainWindow(QMainWindow):
         bar.addWidget(QLabel(" Card "))
         bar.addWidget(self.device_box)
 
+        # Which Windows camera API to read the card through. Auto takes the first that works for
+        # each card; the other two are there to compare the two on one card, by the fps and the
+        # milliseconds the status bar shows for each.
+        self.api_box = QComboBox()
+        for key, label in capture.API_CHOICES:
+            self.api_box.addItem(label, key)
+        self.api_box.setCurrentIndex(max(0, self.api_box.findData(self.config.setting("capture_api"))))
+        self.api_box.setToolTip("DirectShow is what OBS and VLC use; Media Foundation is the newer API.\n"
+                                "Auto tries DirectShow first and uses whichever gets a picture.")
+        self.api_box.currentIndexChanged.connect(self._on_api_changed)
+        bar.addWidget(self.api_box)
+
         self.format_box = QComboBox()
         for label, *_ in RESOLUTIONS:
             self.format_box.addItem(label)
@@ -557,7 +569,14 @@ class MainWindow(QMainWindow):
             return
         self.device_box.clear()
         self.device_box.addItem("scanning for cards...", "")
-        self.scanner.scan()
+        self.scanner.scan(capture.backends_for(self.config.setting("capture_api")))
+
+    def _on_api_changed(self) -> None:
+        self.config.set_setting("capture_api", self.api_box.currentData())
+        if self.capture.running:
+            self.statusBar().showMessage("stop the card, then Rescan cards to use the other API", 5000)
+            return
+        self._refresh_devices()
 
     @staticmethod
     def _device_key(index: int, api: int) -> str:
@@ -1071,9 +1090,17 @@ class MainWindow(QMainWindow):
     def _update_status(self) -> None:
         if self.capture.running and self.capture.format:
             shape = self.capture.format
+            fps = self.capture.measured_fps
+            asked = (shape.get("asked") or {}).get("fps") or 0
+            # The usual reason a capture feels laggy is not the API but a card that fell back to
+            # uncompressed video at a fraction of the rate asked for; so say so when it has.
+            short = f" (asked {asked})" if asked and 0 < fps < asked * 0.66 else ""
+            how = shape.get("backend", "")
+            if shape.get("decoded") == "here":
+                how += ", decoded here"
             self.status_card.setText(
-                f"card: {shape['width']}x{shape['height']} {shape['fourcc']} "
-                f"{self.capture.measured_fps:.0f} fps"
+                f"card: {shape['width']}x{shape['height']} {shape['fourcc']} {fps:.0f} fps{short}"
+                + (f" · {how}" if how else "")
             )
         else:
             self.status_card.setText("card: off")

@@ -46,6 +46,15 @@ BACKENDS = (
 )
 BACKEND_NAMES = {api: name for name, api in BACKENDS}
 
+# The choice offered in the window, as the "capture_api" setting stores it. Auto tries both in
+# BACKENDS order; the other two use one API only, which is how the two are compared on a card.
+API_CHOICES = (("auto", "Auto"), ("dshow", "DirectShow"), ("msmf", "Media Foundation"))
+
+
+def backends_for(choice: str) -> tuple:
+    wanted = {"dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF}.get(choice)
+    return BACKENDS if wanted is None else tuple(item for item in BACKENDS if item[1] == wanted)
+
 # Windows's camera privacy switches. Any one of them at "Deny" refuses the camera to every desktop
 # app, this one included, while a Store app such as Windows Camera may still show the card, which
 # looks exactly like "it works everywhere else".
@@ -219,9 +228,82 @@ def list_devices(limit: int = PROBE_LIMIT, backends=BACKENDS) -> list:
     return found
 
 
+def _is_jpeg(frame) -> bool:
+    """Whether what a capture handed back is a compressed JPEG rather than a picture: one row of
+    bytes that starts with JPEG's start-of-image marker."""
+    if frame is None or getattr(frame, "dtype", None) != np.uint8:
+        return False
+    if frame.ndim == 3 or frame.size < 4:
+        return False
+    flat = frame.reshape(-1)
+    return int(flat[0]) == 0xFF and int(flat[1]) == 0xD8
+
+
+class Feed:
+    """An opened capture, and who turns its frames into pictures.
+
+    With `jpeg`, the capture hands back each MJPG frame still compressed and it is decoded here,
+    by OpenCV's libjpeg-turbo. Otherwise the capture decodes, and what it returns is used as is.
+    Duck-typed as the cv2.VideoCapture CaptureWorker reads, so the worker does not know which; and
+    `grab` stays cheap either way, because only the frame that is finally retrieved is decoded.
+    """
+
+    def __init__(self, capture, jpeg: bool = False):
+        self.capture = capture
+        self.jpeg = jpeg
+
+    def get(self, prop):
+        return self.capture.get(prop)
+
+    def grab(self):
+        return self.capture.grab()
+
+    def retrieve(self):
+        return self._picture(*self.capture.retrieve())
+
+    def read(self):
+        return self._picture(*self.capture.read())
+
+    def release(self):
+        self.capture.release()
+
+    def _picture(self, ok, frame):
+        if not self.jpeg or not ok or frame is None:
+            return ok, frame
+        image = cv2.imdecode(frame, cv2.IMREAD_COLOR)
+        return image is not None, image
+
+
+def _compressed(capture, fourcc: str, api: int) -> bool:
+    """Ask DirectShow for the card's MJPG frames undecoded. True if it agreed and they arrive as
+    JPEG; otherwise it is put back to decoding them itself.
+
+    Left to itself, DirectShow decodes MJPG with Windows's MJPEG Decompressor filter and then
+    converts to bottom-up RGB, which OpenCV flips the right way up: a decoder this PC's OpenCV
+    beats with libjpeg-turbo, and a full-frame copy that is pure overhead. Media Foundation is
+    left alone: its decoder may be the GPU's, which nothing here would beat.
+
+    Not every driver honours the request, and one that half honours it hands back bytes that are
+    neither a picture nor a JPEG. So the first frame decides, and anything else goes back to
+    the ordinary path rather than to a capture that cannot be shown.
+    """
+    if api != cv2.CAP_DSHOW or fourcc != "MJPG":
+        return False
+    try:
+        if not capture.set(cv2.CAP_PROP_CONVERT_RGB, 0):
+            return False
+        ok, frame = capture.read()
+        if ok and _is_jpeg(frame) and cv2.imdecode(frame, cv2.IMREAD_COLOR) is not None:
+            return True
+    except cv2.error:
+        pass
+    capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+    return False
+
+
 def open_device(index: int, fourcc: str, width: int, height: int, fps: int, api: int = cv2.CAP_DSHOW):
-    """One configured capture, or None. The order matters: both back ends pick the stream format
-    from the FOURCC, so that goes first, then the size, then the rate."""
+    """One configured capture as a Feed, or None. The order matters: both back ends pick the
+    stream format from the FOURCC, so that goes first, then the size, then the rate."""
     capture = cv2.VideoCapture(index, api)
     if not capture.isOpened():
         capture.release()
@@ -236,18 +318,19 @@ def open_device(index: int, fourcc: str, width: int, height: int, fps: int, api:
             capture.set(cv2.CAP_PROP_FPS, int(fps))
         # Every buffered frame is a frame of lag. Either back end may refuse; asking costs nothing.
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        ok, frame = capture.read()
+        feed = Feed(capture, _compressed(capture, fourcc, api))
+        ok, frame = feed.read()
         if not ok or frame is None:
             capture.release()
             return None
-        return capture
+        return feed
     except cv2.error:
         capture.release()
         return None
 
 
 def negotiate(index: int, preferred=None, api=None):
-    """Opens `index` with the first format that reads a frame, preferring `preferred` (a
+    """Opens `index` as a Feed with the first format that reads a frame, preferring `preferred` (a
     (fourcc, width, height, fps) tuple) and falling back down FORMAT_LADDER.
 
     With `api`, the back end the device list found this card through, only that one is used.
@@ -269,6 +352,8 @@ def negotiate(index: int, preferred=None, api=None):
                     "fps": round(float(capture.get(cv2.CAP_PROP_FPS)), 1),
                     "backend": BACKEND_NAMES.get(backend, str(backend)),
                     "api": backend,
+                    # Who decodes the MJPG: this app with libjpeg-turbo, or the API itself.
+                    "decoded": "here" if capture.jpeg else "by Windows",
                     "asked": {"fourcc": fourcc, "width": width, "height": height, "fps": fps},
                 }
                 LOGGER.info("capture %d opened: %s", index, actual)
