@@ -56,10 +56,30 @@ USAGE = f"""{APP_NAME} {__version__} -- watch a PC through a capture card and dr
   CaptureKVM.exe --mode receiver     this machine has the capture card: watch and drive
   CaptureKVM.exe --mode host         this machine is the one being watched
   CaptureKVM.exe --pick              ask again, and forget what was remembered
+  CaptureKVM.exe --set-mode MODE     remember host, receiver or ask, and start nothing
 
 Every other argument is passed to the mode that runs. Host mode takes Beamer's own
 (--hidden, --config PATH); receiver mode takes none.
 """
+
+# What --set-mode accepts. "ask" is the installer's "decide when it first starts": it clears
+# whatever was remembered, so the picker comes up.
+SET_MODES = {HOST: HOST, RECEIVER: RECEIVER, "ask": ""}
+
+
+def set_mode(argv, config) -> int:
+    """`--set-mode MODE`: remember MODE and exit, opening no window.
+
+    For the installer, which asks which end the machine is on one of its own pages and has to
+    record the answer somewhere the app will find it. It runs this rather than writing the config
+    file itself: the file's shape is the app's business, and one writer keeps it that way.
+    """
+    _, wanted = _strip(list(argv), "--set-mode", takes_value=True)
+    if wanted is MISSING or wanted not in SET_MODES:
+        print(f"--set-mode takes {', '.join(SET_MODES)}", file=sys.stderr)
+        return 2
+    config.mode = SET_MODES[wanted]
+    return 0
 
 
 MISSING = object()      # `--mode` was given with nothing after it
@@ -268,6 +288,10 @@ def main(argv=None) -> int:
         return 0
 
     from . import store
+
+    if any(argument == "--set-mode" or argument.startswith("--set-mode=") for argument in argv[1:]):
+        # Before anything that could open a window or start a mode: the installer waits on this.
+        return set_mode(argv, store.Store())
 
     try:
         config = store.Store()

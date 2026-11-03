@@ -335,6 +335,43 @@ class RememberedMode(unittest.TestCase):
         self.store.mode = "sideways"
         self.assertEqual(self.store.mode, "")
 
+    # --set-mode: how the installer records the answer to its "which end is this?" page.
+
+    def set_mode(self, *arguments):
+        return launcher.set_mode(["CaptureKVM.exe", *arguments], self.store)
+
+    def test_the_installer_can_remember_host(self):
+        self.assertEqual(self.set_mode("--set-mode", "host"), 0)
+        self.assertEqual(store.Store(self.file).mode, "host")
+
+    def test_the_installer_can_remember_receiver(self):
+        self.assertEqual(self.set_mode("--set-mode=receiver"), 0)
+        self.assertEqual(store.Store(self.file).mode, "receiver")
+
+    def test_ask_clears_what_was_remembered(self):
+        # "Decide when it first starts" on an upgrade over a machine that had answered before.
+        self.store.mode = "host"
+        self.assertEqual(self.set_mode("--set-mode", "ask"), 0)
+        self.assertEqual(store.Store(self.file).mode, "")
+
+    def test_set_mode_refuses_what_is_not_a_mode(self):
+        self.store.mode = "receiver"
+        for arguments in (("--set-mode", "sideways"), ("--set-mode",)):
+            with self.subTest(arguments):
+                self.assertEqual(self.set_mode(*arguments), 2)
+        self.assertEqual(store.Store(self.file).mode, "receiver", "a refused value changes nothing")
+
+    def test_set_mode_starts_nothing(self):
+        # The installer waits on this process; it must not open a picker or a mode's window.
+        with unittest.mock.patch.object(launcher, "ask") as ask, \
+                unittest.mock.patch.object(launcher, "run") as run, \
+                unittest.mock.patch.object(store, "Store", return_value=self.store):
+            code = launcher.main(["CaptureKVM.exe", "--set-mode", "host"])
+        self.assertEqual(code, 0)
+        ask.assert_not_called()
+        run.assert_not_called()
+        self.assertEqual(self.store.mode, "host")
+
 
 DSHOW = capture.cv2.CAP_DSHOW
 MSMF = capture.cv2.CAP_MSMF

@@ -97,27 +97,68 @@ jobs:
       - name: Fullscreen check
         run: python tools/fullscreen_check.py
 
-      # build.ps1 rather than pyinstaller on its own: it writes the "Change mode" command into
-      # the folder and then loads every module of both modes back out of the finished exe. A
-      # windowed exe missing a module shows no window and logs nothing, so a build that packaged
-      # cleanly can still be dead on arrival, and CI is the last place that gets to notice.
+      # The installer compiler, the same pinned file as on a developer's PC, installed for this
+      # user only: Inno Setup 6.7.4, signed by Pyrsys B.V.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP "innosetup-6.7.4.exe"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe" -OutFile $setup
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash
+          if ($hash -ne "A549929319F9120716677C685535CA4671E4B937B5FDC87E2585F32D8EB30E8C") { throw "Inno Setup's SHA-256 is $hash" }
+          $dir = Join-Path $env:RUNNER_TEMP "innosetup"
+          $p = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/NOICONS", "/NORESTART", "/SP-", "/DIR=`"$dir`"" -PassThru -Wait
+          if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\ISCC.exe")) { throw "Inno Setup did not install" }
+          "ISCC=$dir\ISCC.exe" >> $env:GITHUB_ENV
+
+      # build.ps1 rather than pyinstaller on its own: it fetches ViGEm's files, loads every module
+      # of both modes back out of the finished exe, checks ViGEmClient.dll is in it, and compiles
+      # the installer. A windowed exe missing a module shows no window and logs nothing, so a build
+      # that packaged cleanly can still be dead on arrival, and CI is the last place to notice.
       - name: Package
         shell: pwsh
         working-directory: windows
-        run: ./build.ps1 -Python python
+        run: ./build.ps1 -Python python -Installer
 
-      - name: Zip it
+      # Install it, look, uninstall it, on a machine nobody has used. Silently, as a receiver, so
+      # nothing asks for administrator permission; the host's firewall and driver steps cannot be
+      # exercised here without a person to answer Windows's prompts.
+      - name: Install, check and uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem windows/dist/CaptureKVM-Setup-*.exe | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP "ckvm-install-test"
+          $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/ROLE=receiver", "/DIR=`"$dir`"" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "the installer exited with $($p.ExitCode)" }
+          foreach ($file in "CaptureKVM.exe", "_internal\ViGEmClient.dll", "host-firewall.ps1", "unins000.exe") {
+            if (-not (Test-Path (Join-Path $dir $file))) { throw "$file was not installed" }
+          }
+          $config = Get-Content (Join-Path $env:APPDATA "CaptureKVM\config.json") -Raw | ConvertFrom-Json
+          if ($config.mode -ne "receiver") { throw "the role page's answer was not recorded: mode is '$($config.mode)'" }
+          $menu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+          foreach ($link in "CaptureKVM.lnk", "CaptureKVM - change mode.lnk") {
+            if (-not (Test-Path (Join-Path $menu $link))) { throw "no Start menu entry $link" }
+          }
+          Start-Process (Join-Path $dir "unins000.exe") -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          # The uninstaller copies itself away and carries on, so wait for its work, not for it.
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Test-Path (Join-Path $dir "CaptureKVM.exe")) -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+          if (Test-Path (Join-Path $dir "CaptureKVM.exe")) { throw "the uninstaller left CaptureKVM.exe behind" }
+          if (Test-Path (Join-Path $menu "CaptureKVM.lnk")) { throw "the uninstaller left the Start menu entry" }
+          Write-Host "installed, recorded the role, made both Start menu entries, and uninstalled cleanly"
+
+      - name: Name the installer
         shell: pwsh
         run: |
           $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "dev" }
           New-Item -ItemType Directory -Force out | Out-Null
-          Compress-Archive -Path windows/dist/CaptureKVM/* `
-            -DestinationPath "out/CaptureKVM-$tag-windows-x64.zip" -CompressionLevel Optimal
+          $setup = Get-ChildItem windows/dist/CaptureKVM-Setup-*.exe | Select-Object -First 1
+          Copy-Item $setup.FullName "out/CaptureKVM-$tag-windows-setup.exe"
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: out/*.zip
+          path: out/*.exe
           if-no-files-found: error
 
   publish:
@@ -151,18 +192,21 @@ jobs:
           a different key, and Android refuses to install over an app signed with another one — it just says
           \"App not installed\". Uninstalling clears the app's storage, so you will need to pair with the PC again.
 
-          **Windows** — unzip and run \`CaptureKVM.exe\`. Unsigned, so SmartScreen will warn: More info, then Run anyway.
+          **Windows** — run \`CaptureKVM-$GITHUB_REF_NAME-windows-setup.exe\`. It installs for your user only, with
+          no administrator permission. Unsigned, so SmartScreen will warn: More info, then Run anyway.
 
-          One exe is **both** ends of the link. It asks which this machine is the first time, and remembers:
+          One app is **both** ends of the link, and the installer asks which this machine is:
 
           - **receiver** — the machine the capture card is plugged into: shows the PC and drives it.
           - **host** — the PC being watched: takes the keyboard, mouse and controller, the controller through
-            a virtual Xbox pad. This is the bundled Beamer fork's own window.
+            a virtual Xbox pad. This is the bundled Beamer fork's own window. On this PC the installer also
+            offers to open Windows Firewall for the laptop or tablet, and to install the ViGEmBus controller
+            driver if it is missing; each asks for administrator permission through Windows's own prompt.
 
-          So put the same zip on both machines and answer differently. To change the answer: **Change mode**
-          beside the exe, *Mode…* in the receiver's toolbar, or \`CaptureKVM.exe --pick\`.
+          So run the same installer on both machines and answer differently. To change the answer later:
+          **CaptureKVM - change mode** in the Start menu, or *Mode…* in the receiver's toolbar. If an older
+          Beamer is installed on the PC, close it first, or the two will both try to drive the controller.
 
-          The APK is the receiver end only; it needs a PC running this exe in host mode, or stock Beamer
-          without the pad. Gamepad input needs the ViGEmBus driver on the PC; without it everything else
-          still works.
+          The APK is the receiver end only; it needs a PC running CaptureKVM in host mode, or stock Beamer
+          without the pad.
           "

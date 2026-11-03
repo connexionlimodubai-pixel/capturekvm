@@ -56,6 +56,8 @@ Not redistributed here — resolved at build time.
 | [PyNaCl](https://github.com/pyca/pynacl) | Apache-2.0 (bundles libsodium — ISC) | Windows: X25519, ChaCha20-Poly1305, via the vendored core |
 | [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | Windows: UVC capture through Media Foundation and DirectShow |
 | [ViGEmClient](https://github.com/nefarius/ViGEmClient) (`ViGEmClient.dll`, x64, as shipped in [vgamepad](https://github.com/yannbouteiller/vgamepad) 0.2.0) | MIT | Windows host mode: plugging the virtual Xbox pad into the ViGEmBus driver. Fetched at build time by `tools/fetch_vigem_client.py`, pinned by SHA-256, not committed |
+| [ViGEmBus](https://github.com/nefarius/ViGEmBus) 1.17.333 (`ViGEmBusSetup_x64.msi`, Nefarius's signed installer, from the same vgamepad archive) | BSD-3-Clause | Windows installer: offered on the PC being watched when no ViGEmBus driver is installed. Fetched and pinned the same way |
+| [Inno Setup](https://jrsoftware.org/isinfo.php) 6.7.4 | Inno Setup License | Builds the Windows installer; not shipped, beyond the setup and uninstall programs every Inno Setup installer carries |
 | [sounddevice](https://python-sounddevice.readthedocs.io/) (bundles PortAudio — MIT) | MIT | Windows: playing the capture card's audio |
 | AndroidX, Material Components, kotlinx-coroutines | Apache-2.0 | Android |
 

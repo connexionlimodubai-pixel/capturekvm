@@ -11,6 +11,11 @@
 [CmdletBinding()]
 param(
     [switch]$Zip,
+    # Also compile installer\CaptureKVM.iss into dist\CaptureKVM-Setup-<version>.exe. Needs Inno
+    # Setup 6: its ISCC.exe is found through -Iscc, the ISCC environment variable, PATH, or the
+    # places Inno Setup installs itself.
+    [switch]$Installer,
+    [string]$Iscc,
     # CI installs the requirements into the runner's own Python and has no .venv; `-Python python`
     # builds with that instead of making a second environment to install them into again.
     [string]$Python
@@ -121,6 +126,27 @@ if ($Zip) {
     Write-Host "Zipping ..." -ForegroundColor Cyan
     Compress-Archive -Path $dist -DestinationPath $archive
     Write-Host ("  ok  {0} ({1:N1} MB)" -f $archive, ((Get-Item $archive).Length / 1MB)) -ForegroundColor Green
+}
+
+if ($Installer) {
+    $candidates = @($Iscc, $env:ISCC, (Get-Command iscc -ErrorAction SilentlyContinue).Source,
+                    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+                    (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+                    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"))
+    $compiler = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if (-not $compiler) { throw "Inno Setup 6 was not found: pass -Iscc C:\path\to\ISCC.exe or set ISCC" }
+
+    # The Windows version lives in one place, capturekvm/__init__.py; the installer takes it from there.
+    $match = Select-String -LiteralPath (Join-Path $PSScriptRoot "capturekvm\__init__.py") -Pattern '^__version__ = "([^"]+)"'
+    if (-not $match) { throw "no __version__ in capturekvm/__init__.py" }
+    $version = $match.Matches[0].Groups[1].Value
+
+    Write-Host "Compiling the installer for $version ..." -ForegroundColor Cyan
+    Invoke-Native $compiler /Qp "/DAppVersion=$version" (Join-Path $PSScriptRoot "installer\CaptureKVM.iss")
+    if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+    $setup = Join-Path $PSScriptRoot "dist\CaptureKVM-Setup-$version.exe"
+    if (-not (Test-Path -LiteralPath $setup)) { throw "ISCC finished but wrote no $setup" }
+    Write-Host ("  ok  {0} ({1:N1} MB)" -f $setup, ((Get-Item $setup).Length / 1MB)) -ForegroundColor Green
 }
 
 $size = (Get-ChildItem -LiteralPath $dist -Recurse -File | Measure-Object -Property Length -Sum).Sum

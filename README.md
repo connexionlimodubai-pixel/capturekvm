@@ -31,10 +31,11 @@ page, not in the file tree — build output does not belong in a source reposito
 | | |
 |---|---|
 | **Android** | `CaptureKVM-<tag>-android.apk` — sideload it. Debug-signed, so Android warns about an unknown source. |
-| **Windows** | `CaptureKVM-<tag>-windows-x64.zip` — unzip, run `CaptureKVM.exe`. It asks which end of the link the machine is: see [One exe, either end](#one-exe-either-end). Unsigned, so SmartScreen warns: *More info* then *Run anyway*. About 80 MB zipped — both ends together cost 3 MB more than the receiver alone, because they share Qt. |
+| **Windows** | `CaptureKVM-<tag>-windows-setup.exe` — run it. It installs for your user only, needs no administrator permission, and asks which end of the link the machine is: see [The Windows installer](#the-windows-installer). Unsigned, so SmartScreen warns: *More info* then *Run anyway*. Releases up to 0.4.1 shipped a zip instead. |
 
-The APK is one end only: it needs a PC running the Windows exe in host mode, or stock Beamer
-without the pad. The Windows zip is **both** ends — the same exe goes on the PC and on the laptop.
+The APK is one end only: it needs a PC running CaptureKVM in host mode, or stock Beamer without
+the pad. The Windows installer is **both** ends — the same installer goes on the PC and on the
+laptop.
 
 To build them yourself:
 
@@ -43,13 +44,40 @@ cd android && ./gradlew :app:assembleDebug
 ```
 
 ```bash
-cd windows && .\build.ps1
+cd windows && .\build.ps1 -Installer
 ```
 
 `build.ps1` loads every module of both modes back out of the finished exe before it calls the
 build a success. A windowed exe missing a module shows no window and says nothing, so there is no
 other way to find out short of double-clicking it; `.\smoke.ps1` does that part, starting the
-built exe in each mode and checking that a window with the right title appears.
+built exe in each mode and checking that a window with the right title appears. `-Installer`
+then compiles `installer\CaptureKVM.iss` with Inno Setup 6, which has to be installed; without it,
+`build.ps1` builds the app folder alone.
+
+### The Windows installer
+
+Per user, like Beamer's own: it installs to `%LOCALAPPDATA%\Programs\CaptureKVM` with no
+administrator permission, adds *CaptureKVM* and *CaptureKVM - change mode* to the Start menu, and
+uninstalls from Settings → Apps. Your pairings and settings stay in `%APPDATA%\CaptureKVM` across
+an uninstall, so reinstalling keeps them.
+
+It asks which end of the link the machine is — receiver, host, or ask when it starts — and on the
+**PC being watched** it offers two things, each through Windows's own administrator prompt and
+only when ticked:
+
+- **Firewall rules** so the laptop or tablet can reach host mode: TCP 24820, UDP and TCP 24821,
+  private networks only. They have CaptureKVM's own names, never Beamer's: Beamer's uninstaller
+  removes its rules by name, so sharing a name with an old Beamer on the same PC would let either
+  uninstall take the other's rules. Skipped, Windows asks the first time a laptop connects.
+- **The ViGEmBus driver**, offered only when none is installed: Nefarius's signed MSI, for game
+  controllers. A driver that is already there is never touched.
+
+If an older Beamer is installed on the PC, the installer says so: close it before starting
+CaptureKVM, or the two will both try to drive the controller.
+
+Silent installs take `/VERYSILENT /ROLE=host|receiver|ask`, plus `/FIREWALL=0` and `/DRIVER=0` to
+skip those. CI installs every release silently as a receiver on a clean machine, checks what landed,
+and uninstalls it before anything is published.
 
 ## One exe, either end
 
@@ -60,8 +88,9 @@ One `CaptureKVM.exe` is both sides of the link. It asks once, per machine:
 | **receiver** | The machine the capture card is plugged into. Shows the PC's picture, and sends it the keyboard, mouse and controller. |
 | **host** | The PC being watched. Its HDMI goes out to the card and it takes the input back, the controller through a virtual Xbox pad. This mode is the Beamer fork's own window. |
 
-Tick *Always start in this mode* and it stops asking. To change the answer later: **Change mode**
-beside the exe, *Mode…* in the receiver's toolbar, or
+The installer asks this on a page of its own; without an answer there, the app asks when it first
+starts, and *Always start in this mode* stops it asking again. To change the answer later:
+**CaptureKVM - change mode** in the Start menu, *Mode…* in the receiver's toolbar, or
 
 ```bash
 CaptureKVM.exe --mode receiver    # skip the question
