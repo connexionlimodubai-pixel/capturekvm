@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -333,6 +334,141 @@ class RememberedMode(unittest.TestCase):
     def test_junk_cannot_be_stored(self):
         self.store.mode = "sideways"
         self.assertEqual(self.store.mode, "")
+
+
+DSHOW = capture.cv2.CAP_DSHOW
+MSMF = capture.cv2.CAP_MSMF
+
+
+class FakeCamera:
+    """cv2.VideoCapture, for a PC described by `world`: (index, api) -> "reads", "opens", or
+    absent. "opens" is the failure that matters most here -- a device the API accepts and then
+    never gets a frame from."""
+
+    world = {}
+    asked = []
+
+    def __init__(self, index, api):
+        self.key = (index, api)
+        FakeCamera.asked.append(self.key)
+        self.state = FakeCamera.world.get(self.key)
+
+    def isOpened(self):
+        return self.state in ("opens", "reads")
+
+    def read(self):
+        if self.state == "reads":
+            return True, np.zeros((4, 4, 3), np.uint8)
+        return False, None
+
+    def get(self, prop):
+        cv2 = capture.cv2
+        return {cv2.CAP_PROP_FRAME_WIDTH: 1920, cv2.CAP_PROP_FRAME_HEIGHT: 1080,
+                cv2.CAP_PROP_FPS: 30.0, cv2.CAP_PROP_FOURCC: capture.fourcc_code("MJPG")}.get(prop, 0)
+
+    def set(self, prop, value):
+        return True
+
+    def release(self):
+        pass
+
+
+class CardDiscovery(unittest.TestCase):
+    """Finding the card, which the first version could not do for a card every other app saw.
+
+    It probed through Media Foundation alone. Most capture software -- OBS, VLC, the makers' own
+    tools -- uses DirectShow, and cheap HDMI grabbers are exactly the devices Media Foundation
+    tends to refuse or open without ever delivering a frame. None of that can be reproduced
+    without the hardware, so the hardware is described instead and the decisions are checked.
+    """
+
+    def look(self, world, **kwargs):
+        FakeCamera.world = world
+        FakeCamera.asked = []
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+            return capture.list_devices(**kwargs)
+
+    def test_a_card_media_foundation_will_not_open_is_found_through_directshow(self):
+        found = self.look({(0, DSHOW): "reads"})
+        self.assertEqual([(d["index"], d["backend"], d["reads"]) for d in found],
+                         [(0, "DirectShow", True)])
+
+    def test_a_card_that_sends_nothing_through_one_api_is_taken_through_the_other(self):
+        found = self.look({(0, DSHOW): "opens", (0, MSMF): "reads"})
+        self.assertEqual([(d["backend"], d["reads"]) for d in found], [("Media Foundation", True)])
+
+    def test_directshow_is_preferred_when_both_work(self):
+        found = self.look({(0, DSHOW): "reads", (0, MSMF): "reads"})
+        self.assertEqual(found[0]["backend"], "DirectShow")
+        self.assertNotIn((0, MSMF), FakeCamera.asked, "a card already reading needs no second API")
+
+    def test_a_card_neither_api_can_read_is_still_listed(self):
+        # Better listed as "no picture yet" than missing: no picture is a cable or HDMI-source
+        # question, a missing card is a driver question, and they need different answers.
+        found = self.look({(0, MSMF): "opens"})
+        self.assertEqual([(d["backend"], d["reads"]) for d in found], [("Media Foundation", False)])
+
+    def test_a_card_held_by_another_app_does_not_hide_the_next_one(self):
+        # Camera 0 is busy, so it opens under neither API; the card is camera 1.
+        found = self.look({(1, DSHOW): "reads"})
+        self.assertEqual([d["index"] for d in found], [1])
+
+    def test_the_scan_stops_at_the_end_of_the_list(self):
+        self.look({(0, DSHOW): "reads"})
+        self.assertEqual(sorted({index for index, _ in FakeCamera.asked}), [0, 1, 2],
+                         "two empty indices are the end of Windows's list")
+
+    def negotiate(self, world, api):
+        FakeCamera.world = world
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+            return capture.negotiate(1, ("MJPG", 1920, 1080, 30), api)
+
+    def test_starting_a_card_keeps_to_the_api_it_was_found_through(self):
+        # Index 1 through the other API is not guaranteed to be the same device; on a PC with a
+        # webcam it can be the webcam. Better to fail and say so than to show the wrong picture.
+        capture_, actual = self.negotiate({(1, DSHOW): "opens", (1, MSMF): "reads"}, DSHOW)
+        self.assertIsNone(capture_)
+        self.assertIsNone(actual)
+
+    def test_a_setting_from_before_the_choice_tries_both(self):
+        capture_, actual = self.negotiate({(1, DSHOW): "opens", (1, MSMF): "reads"}, None)
+        self.assertIsNotNone(capture_)
+        self.assertEqual((actual["backend"], actual["api"]), ("Media Foundation", MSMF))
+
+
+class EmptyCardList(unittest.TestCase):
+    """When nothing opens, saying why. The three causes look identical from inside the app and are
+    told apart by what Windows itself reports."""
+
+    def privacy(self, values):
+        def read(hive, path):
+            for suffix, value in values.items():
+                if path.endswith(suffix):
+                    return value
+            raise OSError("no such value")
+        return capture.camera_blocked(read)
+
+    def test_all_switches_allowed_is_not_a_block(self):
+        self.assertIsNone(self.privacy({"webcam": "Allow", "NonPackaged": "Allow"}))
+
+    def test_switches_windows_never_wrote_are_not_a_block(self):
+        self.assertIsNone(self.privacy({}))
+
+    def test_desktop_apps_turned_off_is_found(self):
+        # The case that looks like "it works in the Camera app": a Store app keeps its access.
+        reason = self.privacy({"webcam": "Allow", "NonPackaged": "Deny"})
+        self.assertIn("desktop apps", reason)
+
+    def test_the_explanation_follows_the_cause(self):
+        blocked = capture.explain_no_devices(["USB Video"], "camera access is turned off")
+        self.assertIn("Privacy & security", blocked)
+
+        busy = capture.explain_no_devices(["USB Video"], None)
+        self.assertIn("Windows sees USB Video", busy)
+        self.assertIn("Another app", busy)
+
+        missing = capture.explain_no_devices([], None)
+        self.assertIn("does not see a capture card", missing)
 
 
 if __name__ == "__main__":

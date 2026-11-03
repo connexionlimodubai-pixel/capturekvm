@@ -14,8 +14,9 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCursor, QGuiApplication, QImage, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QAction, QCursor, QDesktopServices, QGuiApplication, QImage, QKeySequence,
+                           QPainter, QPixmap)
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
@@ -116,7 +117,10 @@ class VideoView(QWidget):
         painter.fillRect(self.rect(), Qt.black)
         if self._pixmap is None:
             painter.setPen(Qt.gray)
-            painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder or "no picture")
+            # Wrapped and inset: the placeholder is where an empty card list explains itself, in
+            # a paragraph rather than a line.
+            painter.drawText(self.rect().adjusted(48, 48, -48, -48), Qt.AlignCenter | Qt.TextWordWrap,
+                             self._placeholder or "no picture")
             return
         target = self.rect()
         if self._settings.get("scale_mode", "fit") == "actual":
@@ -275,17 +279,20 @@ class DeviceScanner(QObject):
     """Probing eight indices takes seconds, and every one of them is a blocked UI thread, so the
     scan runs on its own and the box is filled when it comes back."""
 
-    found = Signal(list, list)
+    # The devices that opened, the names Windows lists, and which privacy switch (if any) is
+    # refusing the camera -- the last two only matter when the first is empty, to say why.
+    found = Signal(list, list, str)
 
     def scan(self) -> None:
         def work():
             try:
                 devices = capture.list_devices()
                 names = capture.pnp_camera_names()
+                blocked = capture.camera_blocked() or ""
             except Exception:                               # noqa: BLE001 - report nothing found
                 LOGGER.exception("device scan")
-                devices, names = [], []
-            self.found.emit(devices, names)
+                devices, names, blocked = [], [], ""
+            self.found.emit(devices, names, blocked)
 
         threading.Thread(target=work, name="device-scan", daemon=True).start()
 
@@ -543,23 +550,56 @@ class MainWindow(QMainWindow):
     # --- devices and peers ---
 
     def _refresh_devices(self) -> None:
+        if self.capture.running:
+            # The card this window is reading opens for nothing else, this scan included, so a
+            # rescan now would report it missing and blame "another app" for holding it.
+            self.statusBar().showMessage("stop the card before rescanning", 4000)
+            return
         self.device_box.clear()
-        self.device_box.addItem("scanning for cards...", -1)
+        self.device_box.addItem("scanning for cards...", "")
         self.scanner.scan()
 
-    def _on_devices_found(self, found: list, names: list) -> None:
+    @staticmethod
+    def _device_key(index: int, api: int) -> str:
+        """The combo box's data for one card. Index and back end together: the same index through
+        the other API is not guaranteed to be the same device."""
+        return f"{int(index)}:{int(api)}"
+
+    def _on_devices_found(self, found: list, names: list, blocked: str = "") -> None:
         self.device_box.clear()
         for device in found:
-            label = (f"#{device['index']}  {device['width']}x{device['height']} "
+            label = (f"#{device['index']}  {device['backend']}  {device['width']}x{device['height']} "
                      f"{device['fourcc']} @{device['fps']}")
-            self.device_box.addItem(label, device["index"])
+            if not device.get("reads"):
+                label += "  (no picture yet)"
+            self.device_box.addItem(label, self._device_key(device["index"], device["api"]))
         if not found:
-            self.device_box.addItem("no capture device found", -1)
-        wanted = self.config.setting("device_index")
-        index = self.device_box.findData(wanted)
-        if index >= 0:
-            self.device_box.setCurrentIndex(index)
-        self.device_box.setToolTip("Windows sees: " + ", ".join(names) if names else "")
+            self.device_box.addItem("no capture device found", "")
+            self.view.show_text(capture.explain_no_devices(names, blocked))
+            if blocked:
+                self._offer_camera_settings(blocked)
+        # The saved card, through the saved back end if it is still offered that way; otherwise the
+        # same index through whatever works now, which is what a setting from before there was a
+        # choice of back end has to settle for.
+        index = self.config.setting("device_index")
+        wanted = self.device_box.findData(self._device_key(index, self.config.setting("device_api") or 0))
+        if wanted < 0:
+            wanted = next((row for row in range(self.device_box.count())
+                           if str(self.device_box.itemData(row)).startswith(f"{index}:")), -1)
+        if wanted >= 0:
+            self.device_box.setCurrentIndex(wanted)
+        self.device_box.setToolTip("Windows sees: " + ", ".join(names) if names else "Windows lists no USB video device")
+
+    def _offer_camera_settings(self, blocked: str) -> None:
+        """A privacy switch is the one cause of an empty list that has a button to fix it."""
+        answer = QMessageBox.question(
+            self, APP_NAME,
+            f"Windows is blocking the camera for desktop apps: {blocked}.\n\n"
+            "Open Windows's camera settings? Turn on camera access and \"Let desktop apps access "
+            "your camera\", then press Rescan cards.",
+            QMessageBox.Open | QMessageBox.Cancel, QMessageBox.Open)
+        if answer == QMessageBox.Open:
+            QDesktopServices.openUrl(QUrl("ms-settings:privacy-webcam"))
 
     def _refresh_peers(self) -> None:
         self.peer_box.clear()
@@ -576,19 +616,21 @@ class MainWindow(QMainWindow):
             self.capture_button.setText("Start card")
             self.view.show_text("card stopped")
             return
-        index = self.device_box.currentData()
-        if index is None or index < 0:
+        key = self.device_box.currentData()
+        if not key:
             QMessageBox.warning(self, APP_NAME, "No capture device was found. Plug the card in and press Rescan cards.")
             return
+        index, api = (int(part) for part in str(key).split(":"))
         label = self.format_box.currentText()
         chosen = next((item for item in RESOLUTIONS if item[0] == label), RESOLUTIONS[1])
         _, fourcc, width, height, fps = chosen
-        self.config.set_setting("device_index", int(index))
+        self.config.set_setting("device_index", index)
+        self.config.set_setting("device_api", api)
         self.config.set_setting("fourcc", fourcc)
         self.config.set_setting("width", width)
         self.config.set_setting("height", height)
         self.config.set_setting("fps", fps)
-        self.capture.start(index, fourcc, width, height, fps)
+        self.capture.start(index, fourcc, width, height, fps, api)
         self.capture_button.setText("Stop card")
 
     def _keep_raw(self, frame, captured_at=None) -> None:

@@ -104,13 +104,26 @@ installs, and is the fork's own window, documented in
 [`beamer-vigem/README.md`](beamer-vigem/README.md).
 
 1. **Card** — pick the capture device. The list is probed, so each entry shows the format that
-   index actually opened with. Press *Rescan cards* after plugging one in.
+   index actually opened with, and which Windows camera API it opened through. Press *Rescan
+   cards* after plugging one in.
 2. **Format** — `1920x1080 30` with MJPG is the right default. The pixel format matters more than
    the size: a USB 2.0 grabber offers uncompressed YUY2 only at small sizes and single-digit frame
    rates, so MJPG is what makes 1080p possible at all.
 3. **Start card** — the picture appears.
 4. **Pair…** — type the PC's address and the six digits Beamer is showing. One minute, one use.
 5. **Connect**, then **Drive (F9)**.
+
+**If the card is not listed.** Each camera is tried through **DirectShow** first — what OBS, VLC
+and the card makers' own tools use — and then **Media Foundation**. Up to 0.4.0 only Media
+Foundation was tried, and cheap HDMI grabbers are the devices it most often refuses, so a card that
+showed a picture in every other app could be missing here. When the list is still empty, the
+picture area says which of the three causes it is, going by what Windows itself reports:
+
+| It says | What to do |
+|---|---|
+| *Windows is blocking the camera* | a privacy switch is off. It offers to open Settings → Privacy & security → Camera: turn on camera access **and** *Let desktop apps access your camera*. A Store app such as Windows Camera keeps working with that second switch off, which is why the card can look fine elsewhere. |
+| *Windows sees … but it would not open* | another app is holding the card. Only one app can read a capture card at a time: close OBS, the Camera app or the card's software, then *Rescan cards*. |
+| *Windows does not see a capture card* | a cable, port or driver problem: try another USB port. A working card is listed under *Cameras* in Device Manager. |
 
 ### Driving
 

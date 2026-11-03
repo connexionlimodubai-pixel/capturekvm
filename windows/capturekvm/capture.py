@@ -1,10 +1,11 @@
 """Pulling frames off the USB capture card.
 
-The card is an ordinary UVC device, so Media Foundation sees it as a webcam and OpenCV's MSMF
-back end opens it. Two settings decide whether a cheap HDMI grabber gives 1080p or a slideshow:
-the pixel format must be MJPG, because a USB 2.0 card (the MS2109 class, which is most of the
-sub-ten-dollar ones) only offers uncompressed YUY2 at small sizes and low rates, and the buffer
-must be as short as the back end will allow, because every queued frame is a frame of lag.
+The card is an ordinary UVC device, so Windows sees it as a webcam, and OpenCV can read it through
+either of Windows's two camera APIs (see BACKENDS). Two settings decide whether a cheap HDMI
+grabber gives 1080p or a slideshow: the pixel format must be MJPG, because a USB 2.0 card (the
+MS2109 class, which is most of the sub-ten-dollar ones) only offers uncompressed YUY2 at small
+sizes and low rates, and the buffer must be as short as the back end will allow, because every
+queued frame is a frame of lag.
 
 The card's audio is a separate USB audio device and is deliberately not handled here: Windows's
 own "Listen to this device" on the card's recording input routes it to the speakers with less
@@ -15,14 +16,15 @@ import logging
 import subprocess
 import threading
 import time
+import winreg
 
 import cv2
 import numpy as np
 
 LOGGER = logging.getLogger("capturekvm.capture")
 
-# Probing indices that hold no device makes MSMF warn once per index. The warnings say nothing a
-# caller cannot see from the returned list, so they are turned down to errors.
+# Probing indices that hold no device makes the back ends warn once per index. The warnings say
+# nothing a caller cannot see from the returned list, so they are turned down to errors.
 try:
     cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 except AttributeError:
@@ -31,9 +33,33 @@ except AttributeError:
 PROBE_LIMIT = 8
 REOPEN_SECONDS = 1.5
 
-# How many already-queued frames to throw away before showing one. Media Foundation buffers, and
-# CAP_PROP_BUFFERSIZE=1 is a request the back end may ignore, so the depth is drained rather than
-# assumed. Bounded so a device producing faster than real time cannot spin this loop.
+# The two ways Windows offers to read a camera, in the order they are tried.
+#
+# DirectShow first. It is what OBS, VLC, AMCap and the card makers' own tools use, so a card that
+# shows a picture in any of those shows one here. Media Foundation is the newer API, and cheap
+# HDMI grabbers are the devices it most often fails on: an index that will not open, or one that
+# opens and never delivers a frame. The first version of this file used Media Foundation alone,
+# and a card that worked in every other app on the PC did not appear here at all.
+BACKENDS = (
+    ("DirectShow", cv2.CAP_DSHOW),
+    ("Media Foundation", cv2.CAP_MSMF),
+)
+BACKEND_NAMES = {api: name for name, api in BACKENDS}
+
+# Windows's camera privacy switches. Any one of them at "Deny" refuses the camera to every desktop
+# app, this one included, while a Store app such as Windows Camera may still show the card, which
+# looks exactly like "it works everywhere else".
+_CONSENT = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
+CAMERA_PRIVACY = (
+    (winreg.HKEY_LOCAL_MACHINE, _CONSENT, "camera access is turned off for this PC"),
+    (winreg.HKEY_CURRENT_USER, _CONSENT, "camera access is turned off"),
+    (winreg.HKEY_CURRENT_USER, _CONSENT + r"\NonPackaged",
+     "\"Let desktop apps access your camera\" is turned off"),
+)
+
+# How many already-queued frames to throw away before showing one. Both back ends buffer, and
+# CAP_PROP_BUFFERSIZE=1 is a request they may ignore, so the depth is drained rather than assumed.
+# Bounded so a device producing faster than real time cannot spin this loop.
 MAX_DRAIN = 4
 
 # What to ask a card for, best first. A USB 2.0 grabber takes the first; a USB 3.0 one (MS2130 and
@@ -67,12 +93,18 @@ def fourcc_text(code) -> str:
 
 
 def pnp_camera_names() -> list:
-    """The camera-like devices Windows knows about, as a hint beside the index list. Names cannot
-    be mapped to OpenCV indices reliably, so they are shown rather than used."""
+    """The USB video devices Windows has installed, as a hint beside the index list. Names cannot
+    be mapped to OpenCV indices reliably, so they are shown rather than used.
+
+    Found by driver, not by device class. Webcams and HDMI grabbers alike run on Windows's
+    `usbvideo` driver; the classes this used to match also hold every scanner, printer and sound
+    card, which then turned up as possible capture cards. A device whose status is not OK keeps it
+    in brackets, because "the driver failed" is the answer to a different question.
+    """
     script = (
         "Get-CimInstance Win32_PnPEntity | "
-        "Where-Object { $_.PNPClass -in 'Camera','Image','Media' -and $_.Status -eq 'OK' } | "
-        "Select-Object -ExpandProperty Name"
+        "Where-Object { $_.Service -eq 'usbvideo' } | "
+        "ForEach-Object { $_.Status + '|' + $_.Name }"
     )
     try:
         done = subprocess.run(
@@ -82,36 +114,115 @@ def pnp_camera_names() -> list:
         )
     except (OSError, subprocess.SubprocessError):
         return []
-    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+    names = []
+    for line in done.stdout.splitlines():
+        status, _, name = line.strip().partition("|")
+        if name:
+            names.append(name if status == "OK" else f"{name} ({status})")
+    return names
 
 
-def list_devices(limit: int = PROBE_LIMIT) -> list:
-    """Every index MSMF opens, with the format it settled on. Probing is the only honest way to
-    enumerate: OpenCV exposes no device names, and an index that opens is one that works."""
-    found = []
-    for index in range(limit):
-        capture = cv2.VideoCapture(index, cv2.CAP_MSMF)
+def _read_privacy(hive, path):
+    with winreg.OpenKey(hive, path) as key:
+        return winreg.QueryValueEx(key, "Value")[0]
+
+
+def camera_blocked(read=_read_privacy):
+    """Which privacy switch is keeping the camera from desktop apps, or None if none is.
+
+    `read` is the registry read, swapped out by the tests. A switch Windows has never written is
+    not a refusal, so a missing value counts as allowed."""
+    for hive, path, what in CAMERA_PRIVACY:
         try:
-            if not capture.isOpened():
+            value = read(hive, path)
+        except OSError:
+            continue
+        if str(value).strip().lower() == "deny":
+            return what
+    return None
+
+
+def explain_no_devices(windows_sees: list, blocked) -> str:
+    """Why the list is empty, in the order the causes are worth checking.
+
+    The three causes look the same from in here, where nothing opens. They differ in what Windows
+    itself reports, which is what this goes by: a privacy switch at Deny, a usbvideo device that is
+    installed but that neither back end could open, or no usbvideo device at all.
+    """
+    if blocked:
+        return (f"Windows is blocking the camera: {blocked}.\n\n"
+                "Settings → Privacy & security → Camera: turn on camera access and "
+                "\"Let desktop apps access your camera\", then press Rescan cards.")
+    if windows_sees:
+        return (f"Windows sees {', '.join(windows_sees)}, but it would not open.\n\n"
+                "Another app is probably using it. Only one app can read a capture card at a time: "
+                "close OBS, the Camera app or the card's own software, then press Rescan cards.")
+    return ("Windows does not see a capture card.\n\n"
+            "Check the USB cable and try another port. When Windows has it, it is listed under "
+            "Cameras in Device Manager.")
+
+
+def _probe(index: int, api: int):
+    """What one back end makes of one index: None if it will not open, else the format it settled
+    on and whether a frame actually came."""
+    capture = cv2.VideoCapture(index, api)
+    try:
+        if not capture.isOpened():
+            return None
+        ok, frame = capture.read()
+        return {
+            "index": index,
+            "api": int(api),
+            "backend": BACKEND_NAMES.get(api, str(api)),
+            "width": int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            "height": int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            "fps": round(float(capture.get(cv2.CAP_PROP_FPS)), 1),
+            "fourcc": fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)),
+            "reads": bool(ok and frame is not None),
+        }
+    except cv2.error:
+        return None
+    finally:
+        capture.release()
+
+
+def list_devices(limit: int = PROBE_LIMIT, backends=BACKENDS) -> list:
+    """One entry per camera index, through whichever back end works for it.
+
+    For each index the back ends are tried in order: the first that delivers a frame wins, and
+    failing that the first that at least opened it, so a card is offered once, through the API
+    that actually gets its picture. Probing is the only honest way to enumerate: OpenCV gives no
+    names, and an index that reads is one that works.
+
+    Indices are positions in Windows's list of cameras, so they run 0, 1, 2 without gaps, and two
+    empty in a row is the end of the list. Two rather than one, so a camera another app is holding,
+    which opens under neither API, does not hide a card at the index after it.
+    """
+    found, misses = [], 0
+    for index in range(limit):
+        best = None
+        for _, api in backends:
+            seen = _probe(index, api)
+            if seen is None:
                 continue
-            ok, frame = capture.read()
-            found.append({
-                "index": index,
-                "width": int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                "height": int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                "fps": round(float(capture.get(cv2.CAP_PROP_FPS)), 1),
-                "fourcc": fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)),
-                "reads": bool(ok and frame is not None),
-            })
-        finally:
-            capture.release()
+            if seen["reads"]:
+                best = seen
+                break
+            best = best or seen
+        if best is None:
+            misses += 1
+            if misses >= 2:
+                break
+            continue
+        misses = 0
+        found.append(best)
     return found
 
 
-def open_device(index: int, fourcc: str, width: int, height: int, fps: int):
-    """One configured capture, or None. The order matters: MSMF picks the stream format from the
-    FOURCC, so that goes first, then the size, then the rate."""
-    capture = cv2.VideoCapture(index, cv2.CAP_MSMF)
+def open_device(index: int, fourcc: str, width: int, height: int, fps: int, api: int = cv2.CAP_DSHOW):
+    """One configured capture, or None. The order matters: both back ends pick the stream format
+    from the FOURCC, so that goes first, then the size, then the rate."""
+    capture = cv2.VideoCapture(index, api)
     if not capture.isOpened():
         capture.release()
         return None
@@ -123,7 +234,7 @@ def open_device(index: int, fourcc: str, width: int, height: int, fps: int):
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
         if fps:
             capture.set(cv2.CAP_PROP_FPS, int(fps))
-        # Every buffered frame is a frame of lag. MSMF may refuse; asking costs nothing.
+        # Every buffered frame is a frame of lag. Either back end may refuse; asking costs nothing.
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         ok, frame = capture.read()
         if not ok or frame is None:
@@ -135,22 +246,33 @@ def open_device(index: int, fourcc: str, width: int, height: int, fps: int):
         return None
 
 
-def negotiate(index: int, preferred=None):
+def negotiate(index: int, preferred=None, api=None):
     """Opens `index` with the first format that reads a frame, preferring `preferred` (a
-    (fourcc, width, height, fps) tuple) and falling back down FORMAT_LADDER."""
+    (fourcc, width, height, fps) tuple) and falling back down FORMAT_LADDER.
+
+    With `api`, the back end the device list found this card through, only that one is used.
+    Trying the other would be trying a different list: the two APIs usually number cameras the
+    same way but are not obliged to, and on a PC with a webcam as well, "index 1 through the other
+    API" can be the webcam. Without `api`, from a setting saved before there was a choice, each
+    back end is tried in BACKENDS order.
+    """
     ladder = ([tuple(preferred)] if preferred else []) + [item for item in FORMAT_LADDER if item != tuple(preferred or ())]
-    for fourcc, width, height, fps in ladder:
-        capture = open_device(index, fourcc, width, height, fps)
-        if capture is not None:
-            actual = {
-                "fourcc": fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)),
-                "width": int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                "height": int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                "fps": round(float(capture.get(cv2.CAP_PROP_FPS)), 1),
-                "asked": {"fourcc": fourcc, "width": width, "height": height, "fps": fps},
-            }
-            LOGGER.info("capture %d opened: %s", index, actual)
-            return capture, actual
+    apis = [int(api)] if api else [backend for _, backend in BACKENDS]
+    for backend in apis:
+        for fourcc, width, height, fps in ladder:
+            capture = open_device(index, fourcc, width, height, fps, backend)
+            if capture is not None:
+                actual = {
+                    "fourcc": fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)),
+                    "width": int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                    "height": int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                    "fps": round(float(capture.get(cv2.CAP_PROP_FPS)), 1),
+                    "backend": BACKEND_NAMES.get(backend, str(backend)),
+                    "api": backend,
+                    "asked": {"fourcc": fourcc, "width": width, "height": height, "fps": fps},
+                }
+                LOGGER.info("capture %d opened: %s", index, actual)
+                return capture, actual
     return None, None
 
 
@@ -180,10 +302,11 @@ class CaptureWorker:
         self.dropped_stale = 0      # queued frames thrown away to show a newer one
         self.drain = True
 
-    def start(self, index: int, fourcc: str = "MJPG", width: int = 1920, height: int = 1080, fps: int = 30) -> None:
+    def start(self, index: int, fourcc: str = "MJPG", width: int = 1920, height: int = 1080, fps: int = 30,
+              api=None) -> None:
         self.stop()
         with self._lock:
-            self._request = (int(index), fourcc, int(width), int(height), int(fps))
+            self._request = (int(index), fourcc, int(width), int(height), int(fps), api)
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="capture", daemon=True)
         self._thread.start()
@@ -202,13 +325,16 @@ class CaptureWorker:
 
     def _run(self) -> None:
         with self._lock:
-            index, fourcc, width, height, fps = self._request
+            index, fourcc, width, height, fps, api = self._request
         while not self._stop.is_set():
             self._on_status({"state": "opening", "index": index})
-            capture, actual = negotiate(index, (fourcc, width, height, fps))
+            capture, actual = negotiate(index, (fourcc, width, height, fps), api)
             if capture is None:
+                through = f" through {BACKEND_NAMES[api]}" if api in BACKEND_NAMES else ""
                 self._on_status({"state": "failed", "index": index,
-                                 "text": f"could not open capture device {index}"})
+                                 "text": f"Could not open capture device {index}{through}.\n\n"
+                                         "If another app is showing the card, close it: only one app "
+                                         "can read a capture card at a time. Then press Rescan cards."})
                 if self._stop.wait(REOPEN_SECONDS):
                     break
                 continue
