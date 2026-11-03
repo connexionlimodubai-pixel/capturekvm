@@ -147,6 +147,10 @@ jobs:
           **Android** — sideload the APK. It is debug-signed, so Android will warn about an unknown source.
           Needs USB host (OTG) and Android 8.0+.
 
+          **Upgrading on Android: uninstall the old version first.** Each release so far has been signed with
+          a different key, and Android refuses to install over an app signed with another one — it just says
+          \"App not installed\". Uninstalling clears the app's storage, so you will need to pair with the PC again.
+
           **Windows** — unzip and run \`CaptureKVM.exe\`. Unsigned, so SmartScreen will warn: More info, then Run anyway.
 
           One exe is **both** ends of the link. It asks which this machine is the first time, and remembers:

@@ -29,7 +29,7 @@ if BEAMER_ROOT.is_dir() and str(BEAMER_ROOT) not in sys.path:
 
 FROZEN = getattr(sys, "frozen", False)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 APP_NAME = "CaptureKVM"
 # `app` in hello/welcome. Beamer shows it, and its own apps send "beamer"; a different name keeps
