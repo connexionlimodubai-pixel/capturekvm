@@ -245,36 +245,56 @@ PC finds what you just copied rather than what was there before.
 
 ## Android client
 
+| Home | Streaming, with the on-screen controller | The ⋯ menu |
+|---|---|---|
+| ![Home](docs/screenshots/android-home.png) | ![Stream](docs/screenshots/android-stream.png) | ![Menu](docs/screenshots/android-menu.png) |
+
+*Rendered from the app's real layouts on the JVM with Paparazzi, with example data filled in —
+there was no device to take screenshots on.*
+
+Laid out after Steam Link. Plug the card into the phone or tablet (a powered OTG hub helps —
+grabbers draw real current) and grant the USB permission.
+
+**Home** has one big button and a line for each thing that has to be ready — the capture card, a
+paired PC, an input, a connection — each with its own tick. The button does whatever the next step
+is: *Pair a PC* when nothing is paired, *Start Playing* when something is, *Resume* while a stream
+is still connected behind it. Tapping a line does that line's job: the PC line pairs, the input line
+switches input. ⚙ has the on-screen controller's opacity, the touchpad's speed, and pairing and
+forgetting PCs; ? explains the whole thing in four lines.
+
+**Streaming** shows the picture and nothing else but two small round buttons where Steam Link keeps
+its own: ⋯ at the top left opens the menu, the keyboard at the top right opens the soft keyboard.
+If the link drops, a line says *Reconnecting…* until it is back — it redials on its own, so a
+Wi-Fi blip does not throw you back to the home screen.
+
+**The ⋯ menu** switches input, turns the card's sound on, and goes home. Back opens it from the
+stream rather than ending anything: leaving is *Stop streaming*, so a thumb grazing Back mid-game
+cannot drop the session.
+
+| Input | |
+|---|---|
+| **Touchpad** | the picture is a trackpad: drag to move, tap to click, two fingers to scroll, long-press for right-click |
+| **On-screen controller** | a pad drawn over the picture — two sticks, a D-pad, A/B/X/Y, LB/LT/RB/RT and Back/Guide/Start — for a phone with nothing plugged into it |
+| **Controller** | a real pad, read through Android's input events; touch is ignored so a stray thumb cannot move the pointer mid-game |
+
+The choice is remembered. A Bluetooth or USB keyboard works in any of them and sends real key
+names. It is a trackpad, not a touchscreen, because the wire has no absolute-pointer message and
+the tablet has no idea where the PC's cursor currently is — so tapping where you want it cannot
+work.
+
+To build it yourself:
+
 ```bash
-cd android
-./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+cd android && ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-A prebuilt debug APK is at `android/app/build/outputs/apk/debug/app-debug.apk`.
+Lint is in that line on purpose. It found three bugs no unit test could, because the unit tests run
+on a desktop JVM: `BigInteger.TWO` is Android 13 only, so the crypto failed to load — and every
+connection crashed — on Android 12 and older; `windowInsetsController` is Android 11 only, so the
+app crashed on launch on 10 and older; and the manifest had no `VIBRATE` permission, so rumble had
+silently never worked. All three shipped in 0.3.0 and are fixed.
 
-Plug the card into the tablet (a powered OTG hub helps — grabbers draw real current), grant the USB
-permission, then **Pair** and **Connect** as above.
-
-The panel in the middle says which of the three things is still missing — a card, a paired PC, a
-link — with a dot each, and the one button under it does whatever the next step is. It goes away
-once the link is up, leaving the picture.
-
-**Mode** cycles the three ways of driving the PC. One set of touches cannot mean three things, so
-only one is live at a time:
-
-| Control | |
-|---|---|
-| **Touchpad** mode | the picture is a trackpad: drag to move, tap to click, two fingers to scroll, long-press for right-click |
-| **On-screen pad** mode | a controller drawn over the picture — two sticks, a D-pad, A/B/X/Y, LB/LT/RB/RT and Back/Guide/Start — for a phone with nothing plugged into it |
-| **Controller** mode | a real pad, read through Android's input events; touch is ignored so a stray thumb cannot move the pointer mid-game |
-| **Keyboard** | opens the soft keyboard; a Bluetooth or USB keyboard works too and sends real key names |
-| **Fullscreen** | hides this app's own bar, leaving only the picture. Tap **☰** at the top left to bring it back; the choice is remembered, so a tablet kept for playing on opens straight to the picture |
-
-It is a trackpad, not a touchscreen, because the wire has no absolute-pointer message and the
-tablet has no idea where the PC's cursor currently is — so tapping where you want it cannot work.
-
-### The on-screen pad
+### The on-screen controller
 
 Nothing new goes on the wire for it. It builds the same `PadWire.State` in XUSB units that a real
 controller does, sends it down the same link, and lands in the same virtual Xbox pad on the PC —
@@ -287,15 +307,12 @@ all or nothing**: a touchscreen cannot say "half pulled" without giving up a sli
 room, and 255 is right for every game that treats LT and RT as buttons.
 
 The sticks sit in the bottom corners where thumbs rest, with the D-pad and the face buttons above
-them and the shoulders along the top — a real pad's geometry rather than everything crammed into
-reach. `PadLayout` holds that geometry and the arithmetic, with no Android type in it, so it can
-be unit-tested; `PadLayoutPreviewTest` draws it to an SVG under `android/app/build/pad-layout/`,
-because the one bug that got through the arithmetic — the A button drawn across the top of the
-right stick — was only ever going to be found by looking at it.
-
-Android's own status and navigation bars are hidden the whole time, and asked to go again every
-time the app comes back to the front — opening the soft keyboard, a dialog, or switching away and
-back all bring them out otherwise, and nothing used to put them away again.
+them, the shoulders along the top, and the two top corners left clear for the menu and keyboard
+buttons. `PadLayout` holds that geometry and the arithmetic, with no Android type in it, so it can
+be unit-tested — including that no two controls overlap and that nothing sits under a corner
+button. `PadLayoutPreviewTest` draws it to SVG under `android/app/build/pad-layout/`, because the
+one bug that got through the arithmetic — the A button drawn across the top of the right stick —
+was only ever going to be found by looking at it.
 
 ## Gamepad
 
@@ -436,7 +453,8 @@ capturekvm/
     ├── wire/{Crypto,Wire,Pairing,BeamerLink,KeyNames,PadWire}.kt
     ├── MainActivity.kt      UVC preview + input
     ├── PadReader.kt         a real pad to XUSB units
-    ├── ui/PadLayout.kt      ← where the on-screen pad's controls are, and what a touch means
-    ├── ui/GamepadView.kt    ← drawing it, and following fingers
-    └── ui/TouchpadView.kt   the picture as a trackpad
+    ├── ui/PadLayout.kt      where the on-screen controller's controls are, and what a touch means
+    ├── ui/GamepadView.kt    drawing it, and following fingers
+    ├── ui/TouchpadView.kt   the picture as a trackpad
+    └── res/layout/view_{home,session_menu,settings}.xml   ← the three screens
 ```

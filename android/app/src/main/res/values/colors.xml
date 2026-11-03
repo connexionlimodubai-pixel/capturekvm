@@ -1,16 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One place for the palette, so the panel, the bar and the pad overlay agree. Dark and
-     translucent throughout: everything here is drawn over a picture that must stay readable. -->
+<!--
+  Steam Link's look. The home screen is its bright blue; the panels drawn over a stream are
+  Steam's own dark navy and light blue, the colours of every Steam client overlay.
+-->
 <resources>
-    <color name="panel">#E6101619</color>
-    <color name="bar">#B3000000</color>
-    <color name="handle">#99000000</color>
-    <color name="accent">#5BD1C7</color>
-    <color name="accent_deep">#1E6F6A</color>
-    <color name="ok">#4CD07A</color>
-    <color name="off">#7A8C8A</color>
-    <color name="warn">#E8B04B</color>
-    <color name="text">#E8F3F2</color>
-    <color name="text_dim">#9FB3B0</color>
-    <color name="on_accent">#06201E</color>
+    <!-- The home screen's background, darkening toward the bottom right. -->
+    <color name="home_top">#2071C4</color>
+    <color name="home_mid">#185AA3</color>
+    <color name="home_bottom">#0B3468</color>
+    <color name="home_glow">#4D63B7FF</color>
+
+    <!-- The Start Playing tile. -->
+    <color name="tile">#1E9BF0</color>
+    <color name="tile_pressed">#1677BD</color>
+
+    <!-- The round settings and help buttons. -->
+    <color name="chip">#0E2C52</color>
+    <color name="chip_pressed">#081C36</color>
+
+    <!-- A status check: ready, on its way, missing, or not tried yet. -->
+    <color name="ok">#5CB85C</color>
+    <color name="warn">#F0AD4E</color>
+    <color name="bad">#D9534F</color>
+    <color name="idle">#4D6B8C</color>
+
+    <!-- Steam's own overlay palette. -->
+    <color name="panel">#F21B2838</color>
+    <color name="panel_row">#2A475E</color>
+    <color name="panel_row_pressed">#3D6C8D</color>
+    <color name="steam_accent">#66C0F4</color>
+    <color name="steam_text">#C7D5E0</color>
+    <color name="divider">#26FFFFFF</color>
+
+    <color name="text">#FFFFFF</color>
+    <color name="text_dim">#D9FFFFFF</color>
+    <color name="overlay_button">#8C000000</color>
+    <color name="scrim">#73000000</color>
 </resources>

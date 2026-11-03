@@ -67,10 +67,10 @@ class PeerStore(context: Context) {
         get() = preferences.getFloat(KEY_MOUSE_SCALE, 1.6f)
         set(value) = preferences.edit().putFloat(KEY_MOUSE_SCALE, value).apply()
 
-    /** Whether the toolbar is hidden, so a tablet kept for playing on opens straight to picture. */
-    var barHidden: Boolean
-        get() = preferences.getBoolean(KEY_BAR_HIDDEN, false)
-        set(value) = preferences.edit().putBoolean(KEY_BAR_HIDDEN, value).apply()
+    /** The input mode last used, so a phone kept for playing comes back with its controller. */
+    var inputMode: String
+        get() = preferences.getString(KEY_INPUT_MODE, null) ?: "touch"
+        set(value) = preferences.edit().putString(KEY_INPUT_MODE, value).apply()
 
     /** How solid the on-screen pad looks over the picture. */
     var padOpacity: Float
@@ -94,7 +94,7 @@ class PeerStore(context: Context) {
         const val KEY_PEERS = "peers"
         const val KEY_SELECTED = "selected"
         const val KEY_MOUSE_SCALE = "mouse_scale"
-        const val KEY_BAR_HIDDEN = "bar_hidden"
+        const val KEY_INPUT_MODE = "input_mode"
         const val KEY_PAD_OPACITY = "pad_opacity"
     }
 }

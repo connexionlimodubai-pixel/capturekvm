@@ -40,6 +40,14 @@ jobs:
         working-directory: android
         run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
 
+      # Lint, because the unit tests run on a desktop JVM and cannot see an API the phone lacks.
+      # It is how three crashes were found that every test here had passed: BigInteger.TWO
+      # (Android 13+) in the crypto, windowInsetsController (Android 11+) in onCreate, and a
+      # missing VIBRATE permission that silently disabled rumble.
+      - name: Lint
+        working-directory: android
+        run: ./gradlew :app:lintDebug --no-daemon --console=plain
+
       - name: Build the APK
         working-directory: android
         run: ./gradlew :app:assembleDebug --no-daemon --console=plain

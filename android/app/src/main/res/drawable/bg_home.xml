@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A diagonal blue gradient with a soft light behind the title, as Steam Link's home has. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:startColor="@color/home_top"
+                android:centerColor="@color/home_mid"
+                android:endColor="@color/home_bottom"
+                android:type="linear" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.62"
+                android:centerY="0.28"
+                android:gradientRadius="520dp"
+                android:startColor="@color/home_glow"
+                android:endColor="#00000000"
+                android:type="radial" />
+        </shape>
+    </item>
+</layer-list>

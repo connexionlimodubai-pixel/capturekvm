@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The home screen's sizes, in one place so a tablet can have its own (values-sw600dp). A phone's
+  sizes on a ten-inch screen left the whole home screen stranded in the left half of it.
+-->
+<resources>
+    <dimen name="home_margin">32dp</dimen>
+    <dimen name="home_title">34sp</dimen>
+    <dimen name="home_tagline">14sp</dimen>
+    <dimen name="home_chip">46dp</dimen>
+    <dimen name="home_chip_padding">11dp</dimen>
+
+    <dimen name="tile_width">210dp</dimen>
+    <dimen name="tile_height">160dp</dimen>
+    <dimen name="tile_circle">66dp</dimen>
+    <dimen name="tile_icon">36dp</dimen>
+    <dimen name="tile_label">18sp</dimen>
+
+    <dimen name="rows_width">330dp</dimen>
+    <dimen name="rows_gap">32dp</dimen>
+    <dimen name="row_height">46dp</dimen>
+    <dimen name="row_icon">28dp</dimen>
+    <dimen name="row_label">16sp</dimen>
+    <dimen name="row_status">24dp</dimen>
+    <dimen name="row_status_padding">4dp</dimen>
+</resources>

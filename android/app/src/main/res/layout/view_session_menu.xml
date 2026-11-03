@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the ⋯ button opens while streaming: a panel down the left in Steam's overlay colours.
+  Tapping the dimmed picture beside it closes it again.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/scrim"
+    android:clickable="true"
+    android:focusable="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:id="@+id/menuPanel"
+        android:layout_width="310dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@drawable/panel_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="20dp"
+            android:paddingTop="14dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="8dp">
+
+            <ImageView
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_desktop"
+                app:tint="@color/steam_accent" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/menuPeer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/text"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/menuDetail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:textColor="@color/steam_text"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/closeMenu"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/close"
+                android:padding="9dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_close"
+                app:tint="@color/steam_text" />
+        </LinearLayout>
+
+        <View style="@style/Divider" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingBottom="12dp">
+
+                <TextView
+                    style="@style/MenuSection"
+                    android:text="@string/input" />
+
+                <LinearLayout
+                    android:id="@+id/modeTouch"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        android:id="@+id/modeTouchIcon"
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_mouse" />
+
+                    <TextView
+                        android:id="@+id/modeTouchLabel"
+                        style="@style/MenuRowLabel"
+                        android:text="@string/mode_touch" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/modeOnscreen"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        android:id="@+id/modeOnscreenIcon"
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_touch" />
+
+                    <TextView
+                        android:id="@+id/modeOnscreenLabel"
+                        style="@style/MenuRowLabel"
+                        android:text="@string/mode_onscreen" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/modeController"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        android:id="@+id/modeControllerIcon"
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_gamepad" />
+
+                    <TextView
+                        android:id="@+id/modeControllerLabel"
+                        style="@style/MenuRowLabel"
+                        android:text="@string/mode_pad" />
+                </LinearLayout>
+
+                <View style="@style/Divider" />
+
+                <LinearLayout
+                    android:id="@+id/keyboardRow"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_keyboard" />
+
+                    <TextView
+                        style="@style/MenuRowLabel"
+                        android:text="@string/keyboard" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/soundRow"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        android:id="@+id/soundIcon"
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_volume_off" />
+
+                    <TextView
+                        android:id="@+id/soundLabel"
+                        style="@style/MenuRowLabel"
+                        android:text="@string/sound_off" />
+                </LinearLayout>
+
+                <View style="@style/Divider" />
+
+                <LinearLayout
+                    android:id="@+id/homeRow"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_home" />
+
+                    <TextView
+                        style="@style/MenuRowLabel"
+                        android:text="@string/home" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/disconnectRow"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_power" />
+
+                    <TextView
+                        style="@style/MenuRowLabel"
+                        android:text="@string/disconnect" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

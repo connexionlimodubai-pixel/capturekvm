@@ -143,7 +143,8 @@ class Rumbler(private val context: Context? = null) {
         lastSmall = 0
         runCatching {
             pair?.let { (low, high) -> low.cancel(); high.cancel() }
-            manager?.cancel()
+            // Only ever set on API 31+, but said so here too, where lint can see it.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) manager?.cancel()
             @Suppress("DEPRECATION")
             single?.cancel()
         }

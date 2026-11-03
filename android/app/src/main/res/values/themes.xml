@@ -2,43 +2,137 @@
 <resources>
     <style name="Theme.CaptureKVM" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
-        <item name="colorPrimary">@color/accent_deep</item>
-        <item name="colorAccent">@color/accent</item>
+        <item name="colorPrimary">@color/tile</item>
+        <item name="colorAccent">@color/steam_accent</item>
     </style>
 
-    <!-- The bar's buttons. Compact rather than the platform default, because seven of them have
-         to fit across a phone held in landscape with the status text beside them. -->
-    <style name="BarButton" parent="Widget.MaterialComponents.Button.TextButton">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">36dp</item>
-        <item name="android:minWidth">0dp</item>
-        <item name="android:insetLeft">0dp</item>
-        <item name="android:insetTop">0dp</item>
-        <item name="android:insetRight">0dp</item>
-        <item name="android:insetBottom">0dp</item>
-        <item name="android:paddingStart">10dp</item>
-        <item name="android:paddingEnd">10dp</item>
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textColor">@color/accent</item>
-        <item name="android:textSize">12sp</item>
+    <!-- The dialogs (pairing, help, forget) in Steam's dark navy rather than the platform's
+         white. colorSurface, not android:background: a theme's android:background lands on every
+         view inside it, and would take the underline off each text field. -->
+    <style name="Theme.CaptureKVM.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorSurface">#1B2838</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorPrimary">@color/steam_accent</item>
+        <item name="colorAccent">@color/steam_accent</item>
+        <item name="colorControlNormal">@color/steam_text</item>
+        <item name="colorControlActivated">@color/steam_accent</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/steam_text</item>
+        <item name="android:textColorHint">#80C7D5E0</item>
     </style>
 
-    <!-- One line of "is this ready yet" on the home panel. -->
-    <style name="StatusDot">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginEnd">10dp</item>
-        <item name="android:textColor">@color/off</item>
-        <item name="android:textSize">13sp</item>
+    <!-- Home screen: one status line. -->
+    <style name="HomeRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">@dimen/row_height</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:background">@drawable/home_row</item>
+        <item name="android:paddingStart">6dp</item>
+        <item name="android:paddingEnd">6dp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
     </style>
 
-    <style name="StatusRow">
+    <style name="HomeRowIcon">
+        <item name="android:layout_width">@dimen/row_icon</item>
+        <item name="android:layout_height">@dimen/row_icon</item>
+        <item name="tint">@color/text</item>
+        <item name="android:importantForAccessibility">no</item>
+    </style>
+
+    <style name="HomeRowLabel">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginStart">16dp</item>
+        <item name="android:layout_marginEnd">12dp</item>
         <item name="android:ellipsize">end</item>
         <item name="android:maxLines">1</item>
         <item name="android:textColor">@color/text</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">@dimen/row_label</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="HomeRowStatus">
+        <item name="android:layout_width">@dimen/row_status</item>
+        <item name="android:layout_height">@dimen/row_status</item>
+        <item name="android:background">@drawable/white_circle</item>
+        <item name="android:padding">@dimen/row_status_padding</item>
+        <item name="tint">@color/text</item>
+        <item name="android:src">@drawable/ic_check</item>
+    </style>
+
+    <!-- The round settings and help buttons in the home screen's corner. -->
+    <style name="ChipButton">
+        <item name="android:layout_width">@dimen/home_chip</item>
+        <item name="android:layout_height">@dimen/home_chip</item>
+        <item name="android:background">@drawable/chip_circle</item>
+        <item name="android:padding">@dimen/home_chip_padding</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="tint">@color/text</item>
+    </style>
+
+    <!-- The two buttons left on screen while streaming. -->
+    <style name="OverlayButton">
+        <item name="android:layout_width">40dp</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_margin">12dp</item>
+        <item name="android:background">@drawable/overlay_circle</item>
+        <item name="android:padding">9dp</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="tint">@color/text</item>
+    </style>
+
+    <!-- Panels over the stream: Steam's overlay rows. -->
+    <style name="MenuRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">50dp</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:background">@drawable/row</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <style name="MenuRowIcon">
+        <item name="android:layout_width">22dp</item>
+        <item name="android:layout_height">22dp</item>
+        <item name="tint">@color/steam_text</item>
+        <item name="android:importantForAccessibility">no</item>
+    </style>
+
+    <style name="MenuRowLabel">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginStart">18dp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:textColor">@color/steam_text</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <style name="MenuSection">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingTop">14dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:letterSpacing">0.12</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/steam_accent</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="Divider">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:layout_marginTop">6dp</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:background">@color/divider</item>
     </style>
 </resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A tablet: the same home screen, about two fifths larger, so it fills the screen it is on. -->
+<resources>
+    <dimen name="home_margin">56dp</dimen>
+    <dimen name="home_title">48sp</dimen>
+    <dimen name="home_tagline">19sp</dimen>
+    <dimen name="home_chip">60dp</dimen>
+    <dimen name="home_chip_padding">14dp</dimen>
+
+    <dimen name="tile_width">310dp</dimen>
+    <dimen name="tile_height">236dp</dimen>
+    <dimen name="tile_circle">96dp</dimen>
+    <dimen name="tile_icon">52dp</dimen>
+    <dimen name="tile_label">25sp</dimen>
+
+    <dimen name="rows_width">480dp</dimen>
+    <dimen name="rows_gap">48dp</dimen>
+    <dimen name="row_height">64dp</dimen>
+    <dimen name="row_icon">38dp</dimen>
+    <dimen name="row_label">22sp</dimen>
+    <dimen name="row_status">34dp</dimen>
+    <dimen name="row_status_padding">6dp</dimen>
+</resources>

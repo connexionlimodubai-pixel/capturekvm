@@ -122,7 +122,16 @@ object Crypto {
 
     // --- CPace's Elligator 2 ---
 
-    private val FIELD_PRIME: BigInteger = BigInteger.TWO.pow(255).subtract(BigInteger.valueOf(19))
+    /**
+     * `BigInteger.valueOf(2)`, not `TWO`. TWO is Java 9, and Android only gained it in
+     * API 33; this app runs from API 26. Because FIELD_PRIME below is built from it while this
+     * object loads, using TWO did not just break pairing on Android 12 and older -- it made the
+     * whole of `Crypto` fail to load there, the link's handshake included. The unit tests run on
+     * a desktop JVM, which has TWO, so only lint could see it.
+     */
+    private val TWO: BigInteger = BigInteger.valueOf(2)
+
+    private val FIELD_PRIME: BigInteger = TWO.pow(255).subtract(BigInteger.valueOf(19))
     private val CURVE_A: BigInteger = BigInteger.valueOf(486662)
 
     /**
@@ -133,13 +142,13 @@ object Crypto {
     fun elligator2(r: BigInteger): BigInteger {
         val p = FIELD_PRIME
         val one = BigInteger.ONE
-        val denominator = one.add(BigInteger.TWO.multiply(r).multiply(r)).mod(p)
-        val v = CURVE_A.negate().multiply(denominator.modPow(p.subtract(BigInteger.TWO), p)).mod(p)
+        val denominator = one.add(TWO.multiply(r).multiply(r)).mod(p)
+        val v = CURVE_A.negate().multiply(denominator.modPow(p.subtract(TWO), p)).mod(p)
         val inner = v.multiply(v).multiply(v)
             .add(CURVE_A.multiply(v).multiply(v))
             .add(v)
             .mod(p)
-        val isSquare = inner.modPow(p.subtract(one).divide(BigInteger.TWO), p) == one
+        val isSquare = inner.modPow(p.subtract(one).divide(TWO), p) == one
         return if (isSquare) v else v.negate().subtract(CURVE_A).mod(p)
     }
 

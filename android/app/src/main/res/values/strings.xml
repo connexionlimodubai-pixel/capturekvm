@@ -1,37 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">CaptureKVM</string>
-    <string name="tagline">Watch your PC through a capture card, and drive it.</string>
+    <string name="tagline">Play your PC through a capture card.</string>
 
-    <string name="pair">Pair</string>
-    <string name="pair_a_pc">Pair with a PC…</string>
-    <string name="connect">Connect</string>
-    <string name="disconnect">Disconnect</string>
-    <string name="keyboard">Keyboard</string>
-    <string name="keys">Keys</string>
-    <string name="sound_on">Sound</string>
-    <string name="sound_off">Mute</string>
-    <string name="fullscreen">Full</string>
+    <!-- Home -->
+    <string name="start_playing">Start Playing</string>
+    <string name="resume">Resume</string>
+    <string name="pair_a_pc">Pair a PC</string>
+    <string name="settings">Settings</string>
+    <string name="help">Help</string>
+    <string name="card_ready">Capture card</string>
+    <string name="no_card">Plug in the capture card</string>
+    <string name="waiting_signal">Waiting for a picture</string>
+    <string name="no_peer">No PC paired</string>
+    <string name="link_ready">Ready to connect</string>
+    <string name="link_connecting">Connecting…</string>
+    <string name="link_good">Good connection</string>
+    <string name="link_off">Not connected</string>
 
-    <!-- The three input modes, cycled by one button. -->
+    <!-- The three input modes. -->
+    <string name="input">Input</string>
     <string name="mode_touch">Touchpad</string>
-    <string name="mode_onscreen">On-screen pad</string>
+    <string name="mode_onscreen">On-screen controller</string>
     <string name="mode_pad">Controller</string>
+    <string name="controller_found">Controller connected</string>
+    <string name="no_controller">No controller found — plug one in, or use the on-screen controller.</string>
+    <string name="no_controller_short">No controller found</string>
+    <string name="onscreen_hint">On-screen controller. It sends exactly what a real one would.</string>
 
-    <string name="show_bar">☰</string>
-    <string name="show_bar_description">Show the toolbar</string>
-    <string name="fullscreen_hint">Toolbar hidden. Tap ☰ at the top left to bring it back.</string>
-    <string name="dot">●</string>
+    <!-- Stream and its menu -->
+    <string name="menu">Menu</string>
+    <string name="keyboard">Keyboard</string>
+    <string name="sound_on">Sound on</string>
+    <string name="sound_off">Sound off</string>
+    <string name="home">Home</string>
+    <string name="disconnect">Stop streaming</string>
+    <string name="close">Close</string>
+    <string name="reconnecting">Reconnecting to %1$s…</string>
+    <string name="connecting_to">Connecting to %1$s…</string>
+    <string name="not_streaming">Not connected — tap ⋯ for options</string>
 
+    <!-- Settings -->
+    <string name="opacity">Opacity</string>
+    <string name="speed">Speed</string>
+    <string name="pc">PC</string>
+    <string name="pair_another">Pair with a PC…</string>
+    <string name="forget_pc">Forget %1$s</string>
+    <string name="about">About</string>
+
+    <!-- Pairing -->
     <string name="pair_title">Pair with a PC</string>
-    <string name="pair_hint">On the PC: open Beamer, choose Pair, and read off the six digits. The code lasts one minute and works once.</string>
+    <string name="pair_hint">On the PC: open CaptureKVM in host mode (or Beamer), choose Pair, and read off the six digits. The code lasts one minute and works once.</string>
     <string name="pair_address">PC address</string>
     <string name="pair_code">Pairing code</string>
 
-    <string name="no_card">Plug the capture card in</string>
-    <string name="no_peer">Not paired with any PC</string>
-    <string name="link_off">Not connected</string>
-    <string name="waiting_signal">Waiting for a picture from the card</string>
-    <string name="onscreen_hint">On-screen pad. The controls send the same reports a real controller would.</string>
-    <string name="no_controller">No controller found — plug one in, or switch to the on-screen pad.</string>
+    <string name="help_text">1. Plug the capture card into this device, and the PC\'s HDMI into the card.\n\n2. On the PC, run CaptureKVM in host mode. Pair once, with the six-digit code it shows.\n\n3. Press Start Playing. The picture comes down the cable; only your input goes over Wi-Fi.\n\nWhile streaming, ⋯ at the top left opens the menu: switch between the touchpad, the on-screen controller and a real controller, turn the card\'s sound on, or go back home.</string>
 </resources>

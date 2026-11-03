@@ -75,7 +75,8 @@ object Pairing {
     fun generator(prs: ByteArray, channel: ByteArray, sid: ByteArray): ByteArray {
         val padLength = maxOf(0, SHA512_BLOCK_BYTES - 1 - prependLen(prs).size - prependLen(DSI).size)
         val digest = Crypto.sha512(lvCat(DSI, prs, ByteArray(padLength), channel, sid)).copyOf(SHARE_BYTES)
-        val mask = BigInteger.TWO.pow(255).subtract(BigInteger.ONE)
+        // valueOf(2), not BigInteger.TWO: TWO is Android API 33 and this app runs from 26.
+        val mask = BigInteger.valueOf(2).pow(255).subtract(BigInteger.ONE)
         val r = Crypto.fromLittleEndian(digest).and(mask)
         return Crypto.littleEndian(Crypto.elligator2(r), SHARE_BYTES)
     }

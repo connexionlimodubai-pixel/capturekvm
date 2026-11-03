@@ -214,6 +214,34 @@ class PadLayoutTest {
     }
 
     @Test
+    fun `the corner buttons have the corners to themselves`() {
+        // The stream's menu and keyboard buttons sit in the top corners, above this view. A pad
+        // control under either would be unreachable there -- the button takes the touch first.
+        for ((name, layout) in listOf("phone" to phone, "tablet" to tablet, "small" to small)) {
+            val shapes = buildList {
+                add(Control.LEFT_STICK to layout.leftStick)
+                add(Control.RIGHT_STICK to layout.rightStick)
+                add(Control.DPAD to layout.dpad)
+                layout.faces.forEach { (c, circle) -> add(c to circle) }
+            }
+            for (corner in layout.corners) {
+                for ((control, circle) in shapes) {
+                    val nearestX = circle.cx.coerceIn(corner.left, corner.right)
+                    val nearestY = circle.cy.coerceIn(corner.top, corner.bottom)
+                    val apart = Math.hypot((circle.cx - nearestX).toDouble(),
+                                           (circle.cy - nearestY).toDouble())
+                    assertTrue("$name: $control reaches into a corner", apart >= circle.radius)
+                }
+                for ((control, pill) in layout.pills) {
+                    val overlaps = pill.left < corner.right && corner.left < pill.right &&
+                        pill.top < corner.bottom && corner.top < pill.bottom
+                    assertTrue("$name: $control is under a corner button", !overlaps)
+                }
+            }
+        }
+    }
+
+    @Test
     fun `everything is on the screen`() {
         for (layout in listOf(phone, tablet)) {
             val circles = listOf(layout.leftStick, layout.rightStick, layout.dpad) +

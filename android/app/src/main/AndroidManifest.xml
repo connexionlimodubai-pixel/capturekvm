@@ -12,6 +12,12 @@
          what is read is written straight to the speakers and never stored or sent. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- The game's rumble: the controller's motors, or this device's own for the on-screen
+         controller. A normal permission, granted at install with no prompt. Without it every
+         vibrate call throws, Rumbler catches it, and rumble silently never happens — which is
+         how it shipped in 0.2.0 and 0.3.0, until lint pointed at it. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- UVCAndroid's manifest asks for storage for its recording features, which this app does
          not use. Removed rather than inherited: an app that shows a picture and sends key presses
          has no business holding them. -->

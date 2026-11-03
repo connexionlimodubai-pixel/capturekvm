@@ -56,6 +56,14 @@ class PadLayoutPreviewTest {
             .append("\" fill=\"#2A3A3F\" font-family=\"sans-serif\" font-size=\"48\"")
             .append(" text-anchor=\"middle\">the picture</text>\n")
 
+        for (corner in layout.corners) {
+            // Where the stream's menu and keyboard buttons sit, drawn as they will look.
+            val r = 20f * (layout.cornerSize / PadLayout.CORNER_DP)
+            val cx = (corner.left + corner.right) / 2f
+            out.append("<circle cx=\"").append(cx).append("\" cy=\"").append(r * 1.6f)
+                .append("\" r=\"").append(r).append("\" fill=\"#000\" fill-opacity=\"0.55\"")
+                .append(" stroke=\"#fff\" stroke-opacity=\"0.3\"/>\n")
+        }
         circle(out, layout.leftStick.cx, layout.leftStick.cy, layout.leftStick.radius, "", Control.LEFT_STICK)
         knob(out, layout.leftStick.cx, layout.leftStick.cy, layout.knobRadius)
         circle(out, layout.rightStick.cx, layout.rightStick.cy, layout.rightStick.radius, "", Control.RIGHT_STICK)

@@ -91,13 +91,30 @@ class PadLayout(val width: Float, val height: Float, density: Float) {
         Control.Y to Circle(faceCentre.cx, faceCentre.cy - faceSpread, faceRadius),
     )
 
+    /**
+     * The two top corners, kept clear for the stream's own buttons: the menu at the top left and
+     * the keyboard at the top right, where Steam Link keeps its own.
+     *
+     * In plain density, not the pad's scaled `dp`: those buttons are a fixed 40dp at a 12dp margin
+     * however small the pad is drawn, so on a short screen a scaled reserve would shrink out from
+     * under them and put LT on top of the menu button.
+     */
+    val cornerSize = CORNER_DP * density
+    val corners: List<Pill> = listOf(
+        Pill(0f, 0f, cornerSize, cornerSize),
+        Pill(width - cornerSize, 0f, width, cornerSize),
+    )
+
     val pills: Map<Control, Pill> = buildMap {
-        put(Control.LT, Pill(margin, margin, margin + pillWidth, margin + pillHeight))
-        put(Control.LB, Pill(margin + pillWidth + gap, margin,
-                             margin + pillWidth * 2 + gap, margin + pillHeight))
-        put(Control.RT, Pill(width - margin - pillWidth, margin, width - margin, margin + pillHeight))
-        put(Control.RB, Pill(width - margin - pillWidth * 2 - gap, margin,
-                             width - margin - pillWidth - gap, margin + pillHeight))
+        // Shoulders start beside the corner buttons rather than at the screen's edge.
+        val left = cornerSize + gap
+        val right = width - cornerSize - gap
+        put(Control.LT, Pill(left, margin, left + pillWidth, margin + pillHeight))
+        put(Control.LB, Pill(left + pillWidth + gap, margin,
+                             left + pillWidth * 2 + gap, margin + pillHeight))
+        put(Control.RT, Pill(right - pillWidth, margin, right, margin + pillHeight))
+        put(Control.RB, Pill(right - pillWidth * 2 - gap, margin,
+                             right - pillWidth - gap, margin + pillHeight))
         // Back, Guide and Start along the middle of the top edge, in that order.
         val row = width / 2f - (smallWidth * 3 + gap * 2) / 2f
         put(Control.BACK, Pill(row, margin, row + smallWidth, margin + smallHeight))
@@ -176,6 +193,9 @@ class PadLayout(val width: Float, val height: Float, density: Float) {
         (value * PadWire.AXIS_MAX).roundToInt().coerceIn(PadWire.AXIS_MIN, PadWire.AXIS_MAX)
 
     companion object {
+        /** The corner buttons' 40dp, their 12dp margin, and 4dp to breathe. */
+        const val CORNER_DP = 56f
+
         private const val SLACK = 1.15f
         private const val STICK_SLACK = 1.25f
 

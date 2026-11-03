@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.hardware.usb.UsbDevice
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,8 +18,11 @@ import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.ImageView
+import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import com.capturekvm.databinding.ActivityMainBinding
 import com.capturekvm.ui.GamepadView
@@ -27,14 +32,21 @@ import com.capturekvm.wire.KeyNames
 import com.capturekvm.wire.PadWire
 import com.capturekvm.wire.Pairing
 import com.capturekvm.wire.Wire
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.herohan.uvcapp.CameraHelper
 import com.herohan.uvcapp.ICameraHelper
 import com.serenegiant.usb.Size
 import kotlin.concurrent.thread
+import kotlin.math.roundToInt
 import org.json.JSONObject
 
 /**
- * The one screen: the card's picture, and whatever is driving the PC.
+ * The one activity: a home screen, the stream, and the panels laid over them.
+ *
+ * Laid out after Steam Link. The home screen says what is ready -- a card, a paired PC, an input,
+ * a connection -- each with its own tick, and has one big button. The stream has nothing on it
+ * but the picture and two small round buttons, the menu and the keyboard, where Steam Link keeps
+ * its own. Everything else lives in the menu.
  *
  * The video never goes near the network. It comes in over USB from the capture card and is drawn
  * straight to a surface, so what you see is as current as the card can make it. Only key presses,
@@ -43,7 +55,7 @@ import org.json.JSONObject
  * Three input modes, because one set of touches cannot mean three things:
  *
  *  * **Touchpad** -- the picture is a trackpad, sending mouse and keyboard.
- *  * **On-screen pad** -- a controller drawn over the picture ([com.capturekvm.ui.GamepadView]),
+ *  * **On-screen controller** -- a pad drawn over the picture ([com.capturekvm.ui.GamepadView]),
  *    for a phone with nothing plugged into it.
  *  * **Controller** -- a real pad read through Android's input events; the touchscreen is left
  *    alone so a stray thumb cannot move the PC's pointer mid-game.
@@ -53,7 +65,10 @@ import org.json.JSONObject
  */
 class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadView.Listener {
 
-    private enum class Mode { TOUCH, ONSCREEN, PAD }
+    private enum class Mode(val key: String) { TOUCH("touch"), ONSCREEN("onscreen"), PAD("pad") }
+
+    /** A home-screen tick: ready, on its way, missing, or not tried yet. */
+    private enum class Check { OK, PENDING, BAD, IDLE }
 
     private companion object {
         const val REQUEST_AUDIO = 1001
@@ -71,14 +86,38 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     private val audio by lazy { AudioPassthrough(this) { text -> main.post { toast(text) } } }
     private var mode = Mode.TOUCH
     private var padAttached = false
-    private var barHidden = false
 
     private val main = Handler(Looper.getMainLooper())
     private val pad = PadReader { state -> sendPad(state) }
     private val rumbler = Rumbler(this)
 
     private var cardText = ""
-    private var linkText = ""
+    /** A passing remark for the menu's header: a clipboard sent, a pairing made. */
+    private var note = ""
+    /** What the link last complained of, while it is trying again. Cleared once it is up. */
+    private var linkError: String? = null
+    /** Whether this link has been up yet, so a drop reads "reconnecting" and not "connecting". */
+    private var wasUp = false
+
+    // Which layers are up. The stream is whatever shows when the home screen is not.
+    private var homeShown = true
+    private var menuShown = false
+    private var settingsShown = false
+
+    /**
+     * Back closes whatever panel is open, and from the stream opens the menu. It never drops the
+     * link by itself -- a thumb grazing Back mid-game should not end the session -- so leaving
+     * means choosing Stop streaming. From the home screen Back does what it always does.
+     */
+    private val backHandler = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            when {
+                settingsShown -> closeSettings()
+                menuShown -> setMenu(false)
+                !homeShown -> setMenu(true)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,23 +131,9 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         views.touchpad.listener = this
         views.touchpad.scale = store.mouseScale
 
-        views.pairButton.setOnClickListener { askToPair() }
-        views.linkButton.setOnClickListener { toggleLink() }
-        views.modeButton.setOnClickListener { toggleMode() }
-        views.keyboardButton.setOnClickListener { toggleKeyboard() }
-        views.soundButton.setOnClickListener { toggleSound() }
-        views.fullscreenButton.setOnClickListener { setBarHidden(true) }
-        views.showBar.setOnClickListener { setBarHidden(false) }
-        views.startButton.setOnClickListener { primaryAction() }
-        views.homePairButton.setOnClickListener { askToPair() }
-
-        // The on-screen pad reaches the PC by exactly the route a real one does.
+        // The on-screen controller reaches the PC by exactly the route a real one does.
         views.onscreenPad.listener = GamepadView.Listener { state -> sendPad(state) }
         views.onscreenPad.opacity = store.padOpacity
-
-        barHidden = store.barHidden
-        applyBar()
-        applyMode()
 
         views.keyboardSink.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
 
@@ -126,8 +151,11 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
             }
         })
 
+        wireScreens()
+        mode = Mode.values().firstOrNull { it.key == store.inputMode } ?: Mode.TOUCH
+        applyMode()
         cardText = getString(R.string.no_card)
-        showStatus()
+        showScreens()
     }
 
     // --- the capture card ---
@@ -151,7 +179,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
 
     override fun onAttach(device: UsbDevice) {
         attached = device
-        cardText = "card attached"
+        cardText = getString(R.string.waiting_signal)
         showStatus()
         // selectDevice asks for permission if it is not held; onDeviceOpen follows.
         runCatching { camera?.selectDevice(device) }
@@ -167,7 +195,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         val size = runCatching { helper.previewSize }.getOrNull()
         if (size != null && size.width > 0 && size.height > 0) {
             views.preview.setAspectRatio(size.width, size.height)
-            cardText = "card ${size.width}x${size.height} @${size.fps}"
+            cardText = getString(R.string.card_ready) + " · ${size.width}×${size.height} @${size.fps}"
         } else {
             cardText = getString(R.string.waiting_signal)
         }
@@ -191,6 +219,8 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     }
 
     override fun onCancel(device: UsbDevice) {
+        // Without the permission there is no card as far as this app is concerned.
+        attached = null
         cardText = "USB permission refused"
         showStatus()
     }
@@ -218,7 +248,6 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     private fun toggleSound() {
         if (audio.isRunning) {
             audio.stop()
-            views.soundButton.setText(R.string.sound_on)
             showStatus()
             return
         }
@@ -228,7 +257,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_AUDIO)
             return
         }
-        if (audio.start()) views.soundButton.setText(R.string.sound_off)
+        audio.start()
         showStatus()
     }
 
@@ -253,7 +282,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         // it is driving; a null here is that rule, not an error.
         val text = manager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
         if (text.isNullOrEmpty()) return
-        if (current.sendClipboard(text)) linkText = "clipboard sent (${text.length} characters)"
+        if (current.sendClipboard(text)) note = "Clipboard sent (${text.length} characters)"
         showStatus()
     }
 
@@ -261,7 +290,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         val manager = getSystemService(ClipboardManager::class.java) ?: return
         runCatching { manager.setPrimaryClip(ClipData.newPlainText("CaptureKVM", text)) }
             .onSuccess {
-                linkText = "clipboard from the PC (${text.length} characters)"
+                note = "Clipboard from the PC (${text.length} characters)"
                 showStatus()
             }
     }
@@ -269,7 +298,6 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     // --- pairing ---
 
     private fun askToPair() {
-        val frame = layoutInflater.inflate(android.R.layout.simple_list_item_2, null)
         val address = android.widget.EditText(this).apply {
             hint = getString(R.string.pair_address)
             inputType = InputType.TYPE_CLASS_TEXT
@@ -280,16 +308,17 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         }
         val column = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 0)
+            setPadding(56, 16, 56, 0)
             addView(address)
             addView(code)
-            addView(android.widget.TextView(this@MainActivity).apply {
+            addView(TextView(this@MainActivity).apply {
                 text = getString(R.string.pair_hint)
                 textSize = 12f
+                setTextColor(getColor(R.color.steam_text))
                 setPadding(0, 24, 0, 0)
             })
         }
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this, R.style.Theme_CaptureKVM_Dialog)
             .setTitle(R.string.pair_title)
             .setView(column)
             .setNegativeButton(android.R.string.cancel, null)
@@ -297,7 +326,6 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                 pairWith(address.text.toString().trim(), code.text.toString().trim())
             }
             .show()
-        frame.visibility = View.GONE
     }
 
     private fun pairWith(address: String, code: String) {
@@ -305,7 +333,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
             toast("Type the PC's address")
             return
         }
-        linkText = "pairing..."
+        note = "Pairing…"
         showStatus()
         thread(name = "pairing") {
             try {
@@ -316,7 +344,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                         .onSuccess {
                             store.selectedId = peer.id
                             toast("Paired with ${peer.name}")
-                            linkText = "paired with ${peer.name}"
+                            note = "Paired with ${peer.name}"
                             showStatus()
                         }
                 }
@@ -326,7 +354,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                 val text = exc.message ?: "pairing failed"
                 main.post {
                     toast(text)
-                    linkText = "pairing failed"
+                    note = "Pairing failed"
                     showStatus()
                 }
             }
@@ -335,29 +363,21 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
 
     // --- the link ---
 
-    private fun toggleLink() {
-        if (link != null) stopLink() else startLink()
-    }
-
-    /** The home panel's one big button. With nothing paired there is nothing to connect to, so
-     *  it offers the step that is actually missing instead of a toast saying so. */
-    private fun primaryAction() {
-        if (store.selected() == null) askToPair() else toggleLink()
-    }
-
     private fun startLink() {
         val peer = store.selected()
         if (peer == null) {
             toast(getString(R.string.no_peer))
             return
         }
+        linkError = null
+        wasUp = false
         val fresh = BeamerLink(
             peer, store.machineId, store.name,
             onEvent = { kind, detail -> main.post { onLinkEvent(kind, detail) } },
         )
         link = fresh
         fresh.start()
-        views.linkButton.setText(R.string.disconnect)
+        showStatus()
     }
 
     private fun stopLink() {
@@ -373,8 +393,9 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
             }
             thread(name = "link-stop") { current.stop() }
         }
-        views.linkButton.setText(R.string.connect)
-        linkText = "link off"
+        linkError = null
+        wasUp = false
+        note = ""
         showStatus()
     }
 
@@ -386,9 +407,9 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
                 }
             }
             "state" -> {
-                val state = detail.optString("state")
-                linkText = "link $state"
-                if (state == BeamerLink.STATE_UP) {
+                if (detail.optString("state") == BeamerLink.STATE_UP) {
+                    wasUp = true
+                    linkError = null
                     attachPad()
                     // Before any input, as WIRE.md section 3 asks.
                     sendClipboard()
@@ -408,7 +429,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
             }
             "clipboard" -> receiveClipboard(detail.optString("text"))
             "error" -> {
-                linkText = detail.optString("text")
+                linkError = detail.optString("text").ifEmpty { null }
                 showStatus()
             }
         }
@@ -419,7 +440,7 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
     private fun attachPad() {
         val current = link ?: return
         if (!current.gamepadReady || padAttached) return
-        // The on-screen pad is a pad, and there is no InputDevice to find for it.
+        // The on-screen controller is a pad, and there is no InputDevice to find for it.
         if (mode != Mode.ONSCREEN && !PadReader.anyPadAttached()) return
         current.sendUnsequenced(PadWire.attach(0, PadWire.KIND_X360))
         padAttached = true
@@ -500,20 +521,164 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         link?.sendInput(Wire.scroll(dy, dx, "line"))
     }
 
-    // --- chrome ---
+    // --- screens ---------------------------------------------------------------------------
+    //
+    // Three layers over the stream, each with a flag: the home screen, the menu, the settings.
+    // showScreens() makes the views agree with the flags, and everything that changes a flag
+    // calls it, so there is one place where "what is visible" is decided.
 
-    private fun toggleMode() {
-        mode = when (mode) {
-            Mode.TOUCH -> Mode.ONSCREEN
-            Mode.ONSCREEN -> Mode.PAD
-            Mode.PAD -> Mode.TOUCH
+    private fun wireScreens() {
+        val home = views.homeScreen
+        home.startTile.setOnClickListener { startPlaying() }
+        home.settingsButton.setOnClickListener { openSettings() }
+        home.helpButton.setOnClickListener { showHelp() }
+        home.rowCard.setOnClickListener { if (!cameraOpen) toast(getString(R.string.no_card)) }
+        home.rowPeer.setOnClickListener { askToPair() }
+        home.rowInput.setOnClickListener { setMode(nextMode(mode)) }
+        home.rowLink.setOnClickListener { if (link == null) startPlaying() }
+        home.version.text = "v" + runCatching {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull().orEmpty()
+
+        views.menuButton.setOnClickListener { setMenu(true) }
+        views.streamKeyboard.setOnClickListener { toggleKeyboard() }
+
+        val menu = views.sessionMenu
+        menu.root.setOnClickListener { setMenu(false) }          // the dimmed picture beside it
+        menu.closeMenu.setOnClickListener { setMenu(false) }
+        menu.modeTouch.setOnClickListener { setMode(Mode.TOUCH) }
+        menu.modeOnscreen.setOnClickListener { setMode(Mode.ONSCREEN) }
+        menu.modeController.setOnClickListener { setMode(Mode.PAD) }
+        menu.keyboardRow.setOnClickListener {
+            setMenu(false)
+            toggleKeyboard()
         }
+        menu.soundRow.setOnClickListener { toggleSound() }
+        menu.homeRow.setOnClickListener { goHome() }
+        menu.disconnectRow.setOnClickListener {
+            stopLink()
+            goHome()
+        }
+
+        val settings = views.settingsScreen
+        settings.root.setOnClickListener { closeSettings() }
+        settings.closeSettings.setOnClickListener { closeSettings() }
+        settings.pairRow.setOnClickListener {
+            closeSettings()
+            askToPair()
+        }
+        settings.forgetRow.setOnClickListener { forgetPeer() }
+        settings.opacitySeek.setOnSeekBarChangeListener(onSeek { value ->
+            val opacity = 0.1f + value / 100f
+            store.padOpacity = opacity
+            views.onscreenPad.opacity = opacity
+        })
+        settings.speedSeek.setOnSeekBarChangeListener(onSeek { value ->
+            val speed = 0.6f + value / 10f
+            store.mouseScale = speed
+            views.touchpad.scale = speed
+        })
+
+        onBackPressedDispatcher.addCallback(this, backHandler)
+    }
+
+    /** Start Playing: pair first if there is nothing to play, otherwise connect and go to it. */
+    private fun startPlaying() {
+        if (store.selected() == null) {
+            askToPair()
+            return
+        }
+        if (link == null) startLink()
+        homeShown = false
+        menuShown = false
+        showScreens()
+    }
+
+    /** Back to the home screen. The link stays up: Resume picks the stream back up. */
+    private fun goHome() {
+        hideKeyboard()
+        menuShown = false
+        homeShown = true
+        showScreens()
+    }
+
+    private fun setMenu(open: Boolean) {
+        menuShown = open
+        if (open) hideKeyboard()
+        showScreens()
+    }
+
+    private fun openSettings() {
+        val settings = views.settingsScreen
+        settings.opacitySeek.progress = ((store.padOpacity - 0.1f) * 100f).roundToInt().coerceIn(0, 90)
+        settings.speedSeek.progress = ((store.mouseScale - 0.6f) * 10f).roundToInt().coerceIn(0, 40)
+        val peer = store.selected()
+        settings.forgetRow.visibility = if (peer != null) View.VISIBLE else View.GONE
+        settings.forgetLabel.text = getString(R.string.forget_pc, peer?.name.orEmpty())
+        settings.aboutText.text = buildString {
+            append("CaptureKVM ").append(views.homeScreen.version.text)
+            append("\nThis device: ").append(store.name)
+            peer?.let { append("\nPaired with: ").append(it.name).append(" (").append(it.host).append(")") }
+        }
+        settingsShown = true
+        showScreens()
+    }
+
+    private fun closeSettings() {
+        settingsShown = false
+        showScreens()
+    }
+
+    private fun forgetPeer() {
+        val peer = store.selected() ?: return
+        MaterialAlertDialogBuilder(this, R.style.Theme_CaptureKVM_Dialog)
+            .setTitle(getString(R.string.forget_pc, peer.name))
+            .setMessage("To use it again you will need a new six-digit code from the PC.")
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                if (link != null) stopLink()
+                store.forget(peer.id)
+                store.selectedId = null
+                closeSettings()
+            }
+            .show()
+    }
+
+    private fun showHelp() {
+        MaterialAlertDialogBuilder(this, R.style.Theme_CaptureKVM_Dialog)
+            .setTitle(R.string.help)
+            .setMessage(R.string.help_text)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    /** Make the views agree with the three flags. */
+    private fun showScreens() {
+        val streaming = !homeShown
+        views.homeScreen.root.visibility = if (homeShown) View.VISIBLE else View.GONE
+        views.menuButton.visibility = if (streaming) View.VISIBLE else View.GONE
+        views.streamKeyboard.visibility = if (streaming) View.VISIBLE else View.GONE
+        views.sessionMenu.root.visibility = if (streaming && menuShown) View.VISIBLE else View.GONE
+        views.settingsScreen.root.visibility = if (settingsShown) View.VISIBLE else View.GONE
+        backHandler.isEnabled = settingsShown || menuShown || streaming
+        showStatus()
+    }
+
+    // --- input modes ---
+
+    private fun nextMode(current: Mode) = when (current) {
+        Mode.TOUCH -> Mode.ONSCREEN
+        Mode.ONSCREEN -> Mode.PAD
+        Mode.PAD -> Mode.TOUCH
+    }
+
+    private fun setMode(next: Mode) {
+        if (next == mode) return
+        mode = next
+        store.inputMode = next.key
         applyMode()
-        when (mode) {
-            Mode.ONSCREEN -> toast(getString(R.string.onscreen_hint))
-            Mode.PAD -> if (!PadReader.anyPadAttached()) toast(getString(R.string.no_controller))
-            Mode.TOUCH -> Unit
-        }
+        if (next == Mode.PAD && !PadReader.anyPadAttached()) toast(getString(R.string.no_controller))
+        showStatus()
     }
 
     /**
@@ -524,11 +689,6 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
      * button would otherwise be stranded.
      */
     private fun applyMode() {
-        views.modeButton.setText(when (mode) {
-            Mode.TOUCH -> R.string.mode_touch
-            Mode.ONSCREEN -> R.string.mode_onscreen
-            Mode.PAD -> R.string.mode_pad
-        })
         views.touchpad.visibility = if (mode == Mode.TOUCH) View.VISIBLE else View.GONE
         views.onscreenPad.visibility = if (mode == Mode.ONSCREEN) View.VISIBLE else View.GONE
         pad.reset()
@@ -537,28 +697,144 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         if (mode == Mode.ONSCREEN) main.post { attachPad() }
     }
 
-    /**
-     * Fullscreen, on a screen that is already fullscreen.
-     *
-     * `goImmersive` only takes away Android's own bars; this app's bar sat over the top of the
-     * picture whatever happened, and there was no way to be rid of it. Hiding it leaves nothing
-     * but the card's picture, which is the point of a tablet propped up in front of you.
-     *
-     * The choice is remembered, so a device kept for playing on opens straight to the picture.
-     */
-    private fun setBarHidden(hidden: Boolean) {
-        barHidden = hidden
-        store.barHidden = hidden
-        applyBar()
+    // --- what the screens say ---
+
+    private fun showStatus() {
         showHome()
-        goImmersive()
-        if (hidden) toast(getString(R.string.fullscreen_hint))
+        showMenu()
+        showStreamStatus()
     }
 
-    private fun applyBar() {
-        views.bar.visibility = if (barHidden) View.GONE else View.VISIBLE
-        views.showBar.visibility = if (barHidden) View.VISIBLE else View.GONE
+    /** The connection, in one line: the same words on the home screen and in the menu. */
+    private fun linkLine(): String {
+        val current = link
+            ?: return getString(if (store.selected() == null) R.string.link_off else R.string.link_ready)
+        if (current.isUp) {
+            val ms = current.rttMs?.let { " · ${it.toInt()} ms" }.orEmpty()
+            return getString(R.string.link_good) + ms
+        }
+        return linkError ?: getString(R.string.link_connecting)
     }
+
+    private fun showHome() {
+        val home = views.homeScreen
+        val peer = store.selected()
+        val current = link
+
+        home.labelCard.text = cardText
+        check(home.statusCard, when {
+            cameraOpen -> Check.OK
+            attached != null -> Check.PENDING
+            else -> Check.BAD
+        })
+
+        home.labelPeer.text = peer?.name ?: getString(R.string.no_peer)
+        check(home.statusPeer, if (peer != null) Check.OK else Check.BAD)
+
+        val padHere = PadReader.anyPadAttached()
+        home.iconInput.setImageResource(modeIcon(mode))
+        home.labelInput.text = when (mode) {
+            Mode.TOUCH -> getString(R.string.mode_touch)
+            Mode.ONSCREEN -> getString(R.string.mode_onscreen)
+            Mode.PAD -> getString(if (padHere) R.string.controller_found else R.string.no_controller_short)
+        }
+        check(home.statusInput, if (mode == Mode.PAD && !padHere) Check.BAD else Check.OK)
+
+        home.labelLink.text = linkLine()
+        check(home.statusLink, when {
+            current == null -> Check.IDLE
+            current.isUp -> Check.OK
+            linkError != null -> Check.BAD
+            else -> Check.PENDING
+        })
+
+        when {
+            peer == null -> {
+                home.startIcon.setImageResource(R.drawable.ic_add)
+                home.startLabel.setText(R.string.pair_a_pc)
+            }
+            current != null -> {
+                home.startIcon.setImageResource(R.drawable.ic_play)
+                home.startLabel.setText(R.string.resume)
+            }
+            else -> {
+                home.startIcon.setImageResource(R.drawable.ic_play)
+                home.startLabel.setText(R.string.start_playing)
+            }
+        }
+    }
+
+    private fun showMenu() {
+        val menu = views.sessionMenu
+        menu.menuPeer.text = store.selected()?.name ?: getString(R.string.no_peer)
+        menu.menuDetail.text = if (note.isEmpty()) linkLine() else linkLine() + "\n" + note
+
+        val padHere = PadReader.anyPadAttached()
+        menu.modeControllerLabel.text = if (padHere) getString(R.string.mode_pad)
+        else getString(R.string.mode_pad) + " — " + getString(R.string.no_controller_short).lowercase()
+        val rows = listOf(
+            Triple(Mode.TOUCH, menu.modeTouch, menu.modeTouchIcon to menu.modeTouchLabel),
+            Triple(Mode.ONSCREEN, menu.modeOnscreen, menu.modeOnscreenIcon to menu.modeOnscreenLabel),
+            Triple(Mode.PAD, menu.modeController, menu.modeControllerIcon to menu.modeControllerLabel),
+        )
+        for ((rowMode, row, parts) in rows) {
+            val chosen = rowMode == mode
+            row.isSelected = chosen
+            val colour = getColor(if (chosen) R.color.steam_accent else R.color.steam_text)
+            parts.first.imageTintList = ColorStateList.valueOf(colour)
+            parts.second.setTextColor(colour)
+        }
+
+        val playing = audio.isRunning
+        menu.soundIcon.setImageResource(if (playing) R.drawable.ic_volume_up else R.drawable.ic_volume_off)
+        menu.soundLabel.setText(if (playing) R.string.sound_on else R.string.sound_off)
+        menu.disconnectRow.visibility = if (link != null) View.VISIBLE else View.GONE
+    }
+
+    /** A line at the top of the stream while there is something wrong with it, and none when
+     *  there is not: the point of the stream is that nothing is drawn over the PC. */
+    private fun showStreamStatus() {
+        val current = link
+        val name = store.selected()?.name ?: "the PC"
+        val text = when {
+            homeShown -> null
+            current == null -> getString(R.string.not_streaming)
+            !current.isUp && wasUp -> getString(R.string.reconnecting, name)
+            !current.isUp -> linkError ?: getString(R.string.connecting_to, name)
+            !cameraOpen -> cardText
+            else -> null
+        }
+        views.streamStatus.text = text.orEmpty()
+        views.streamStatus.visibility = if (text == null) View.GONE else View.VISIBLE
+    }
+
+    private fun check(view: ImageView, state: Check) {
+        val (colour, icon) = when (state) {
+            Check.OK -> R.color.ok to R.drawable.ic_check
+            Check.PENDING -> R.color.warn to R.drawable.ic_more
+            Check.BAD -> R.color.bad to R.drawable.ic_close
+            Check.IDLE -> R.color.idle to R.drawable.ic_more
+        }
+        view.backgroundTintList = ColorStateList.valueOf(getColor(colour))
+        view.setImageResource(icon)
+    }
+
+    private fun modeIcon(of: Mode) = when (of) {
+        Mode.TOUCH -> R.drawable.ic_mouse
+        Mode.ONSCREEN -> R.drawable.ic_touch
+        Mode.PAD -> R.drawable.ic_gamepad
+    }
+
+    private fun onSeek(changed: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
+            if (fromUser) changed(value)
+        }
+
+        override fun onStartTrackingTouch(bar: SeekBar) = Unit
+        override fun onStopTrackingTouch(bar: SeekBar) = Unit
+    }
+
+    // --- keyboard and system bars ---
 
     private fun toggleKeyboard() {
         val manager = getSystemService(InputMethodManager::class.java)
@@ -585,73 +861,25 @@ class MainActivity : AppCompatActivity(), ICameraHelper.StateCallback, TouchpadV
         if (hasFocus) goImmersive()
     }
 
+    /**
+     * Android's own bars away. Decided by the API level, not by whether `windowInsetsController`
+     * comes back null: it is an Android 11 method, and on 8, 9 and 10 asking for it throws rather
+     * than answering null -- from onCreate, so the app used to crash on launch there.
+     */
     private fun goImmersive() {
-        val controller = window.decorView.windowInsetsController
-        @Suppress("DEPRECATION")
-        if (controller != null) {
-            controller.hide(android.view.WindowInsets.Type.systemBars())
-            controller.systemBarsBehavior =
-                android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.decorView.windowInsetsController?.let { controller ->
+                controller.hide(android.view.WindowInsets.Type.systemBars())
+                controller.systemBarsBehavior =
+                    android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
         } else {
+            @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility =
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_FULLSCREEN
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
         }
-    }
-
-    private fun showStatus() {
-        val pieces = mutableListOf(cardText)
-        if (linkText.isNotEmpty()) pieces.add(linkText)
-        link?.rttMs?.let { pieces.add("${it.toInt()} ms") }
-        if (padAttached) pieces.add("pad -> PC")
-        audio.format?.let { pieces.add("sound $it") }
-        views.status.text = pieces.joinToString("   ")
-        showHome()
-    }
-
-    /**
-     * The three things that have to be true before the PC can be driven, each on its own line.
-     *
-     * The bar's single run of status text says all of this already, but only to someone who
-     * knows how to read it; when nothing is working yet, what is wanted is which of the three
-     * steps is the one still missing.
-     */
-    private fun showHome() {
-        val peer = store.selected()
-        val current = link
-        val connected = current != null && current.isUp
-
-        dot(views.dotCard, cameraOpen)
-        views.rowCard.text = if (cameraOpen) cardText else getString(R.string.no_card)
-
-        dot(views.dotPeer, peer != null)
-        views.rowPeer.text = peer?.let { "Paired with ${it.name}" } ?: getString(R.string.no_peer)
-
-        dot(views.dotLink, connected, pending = current != null)
-        views.rowLink.text = when {
-            connected -> linkText.ifEmpty { "Connected" }
-            current != null -> linkText.ifEmpty { "Connecting…" }
-            else -> getString(R.string.link_off)
-        }
-
-        views.startButton.setText(when {
-            peer == null -> R.string.pair_a_pc
-            current != null -> R.string.disconnect
-            else -> R.string.connect
-        })
-        views.homePairButton.visibility = if (peer == null) View.GONE else View.VISIBLE
-
-        // Gone once there is a picture to watch, and gone in fullscreen, where the whole point
-        // is that nothing is drawn over the PC.
-        views.home.visibility = if (connected || barHidden) View.GONE else View.VISIBLE
-    }
-
-    private fun dot(view: android.widget.TextView, on: Boolean, pending: Boolean = false) {
-        view.setTextColor(getColor(when {
-            on -> R.color.ok
-            pending -> R.color.warn
-            else -> R.color.off
-        }))
     }
 
     private fun toast(text: String) {

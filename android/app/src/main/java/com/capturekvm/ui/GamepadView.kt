@@ -248,8 +248,8 @@ class GamepadView @JvmOverloads constructor(
     private fun alpha(of: Float): Int = (255 * opacity * of).toInt().coerceIn(0, 255)
 
     private companion object {
-        /** The app's accent, so a pressed control looks like the rest of the interface. */
-        const val ACCENT = 0xFF5BD1C7.toInt()
+        /** Steam's light blue, so a pressed control looks like the rest of the interface. */
+        const val ACCENT = 0xFF66C0F4.toInt()
 
         val DPAD_BITS = PadWire.BTN_DPAD_UP or PadWire.BTN_DPAD_DOWN or
             PadWire.BTN_DPAD_LEFT or PadWire.BTN_DPAD_RIGHT

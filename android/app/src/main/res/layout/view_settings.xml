@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the gear on the home screen opens. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/scrim"
+    android:clickable="true"
+    android:focusable="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:id="@+id/settingsCard"
+        android:layout_width="460dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="20dp"
+        android:layout_marginBottom="20dp"
+        android:background="@drawable/card_bg"
+        android:clickable="true"
+        android:elevation="8dp"
+        android:focusable="true"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="20dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="4dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/settings"
+                android:textColor="@color/text"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/closeSettings"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/close"
+                android:padding="9dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_close"
+                app:tint="@color/steam_text" />
+        </LinearLayout>
+
+        <View style="@style/Divider" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingBottom="16dp">
+
+                <TextView
+                    style="@style/MenuSection"
+                    android:text="@string/mode_onscreen" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:text="@string/opacity"
+                    android:textColor="@color/steam_text"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/opacitySeek"
+                    android:layout_width="match_parent"
+                    android:layout_height="40dp"
+                    android:max="90"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:progressTint="@color/steam_accent"
+                    android:thumbTint="@color/steam_accent" />
+
+                <TextView
+                    style="@style/MenuSection"
+                    android:text="@string/mode_touch" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:text="@string/speed"
+                    android:textColor="@color/steam_text"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/speedSeek"
+                    android:layout_width="match_parent"
+                    android:layout_height="40dp"
+                    android:max="40"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:progressTint="@color/steam_accent"
+                    android:thumbTint="@color/steam_accent" />
+
+                <TextView
+                    style="@style/MenuSection"
+                    android:text="@string/pc" />
+
+                <LinearLayout
+                    android:id="@+id/pairRow"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_add" />
+
+                    <TextView
+                        style="@style/MenuRowLabel"
+                        android:text="@string/pair_another" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/forgetRow"
+                    style="@style/MenuRow">
+
+                    <ImageView
+                        style="@style/MenuRowIcon"
+                        android:src="@drawable/ic_close" />
+
+                    <TextView
+                        android:id="@+id/forgetLabel"
+                        style="@style/MenuRowLabel" />
+                </LinearLayout>
+
+                <TextView
+                    style="@style/MenuSection"
+                    android:text="@string/about" />
+
+                <TextView
+                    android:id="@+id/aboutText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="3dp"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:textColor="@color/steam_text"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>
