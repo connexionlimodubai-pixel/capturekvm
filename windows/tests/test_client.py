@@ -15,6 +15,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -377,16 +378,11 @@ DSHOW = capture.cv2.CAP_DSHOW
 MSMF = capture.cv2.CAP_MSMF
 
 
-JPEG = capture.cv2.imencode(".jpg", np.full((8, 8, 3), 128, np.uint8))[1].reshape(1, -1)
-
-
 class FakeCamera:
-    """cv2.VideoCapture, for a PC described by `world`: (index, api) -> a state, or absent.
-
-    "opens" is the failure that matters most for finding cards: a device the API accepts and then
-    never gets a frame from. "reads" is a working card whose driver ignores a request for undecoded
-    frames; "jpeg" honours it; "junk" half honours it and hands back bytes that are no picture.
-    """
+    """cv2.VideoCapture, for a PC described by `world`: (index, api) -> "reads", "opens", or
+    absent. "opens" is the failure that matters most for finding cards: a device the API accepts
+    and then never gets a frame from. It reports MJPG 1080p, so a DirectShow open that checks the
+    format it got back is satisfied."""
 
     world = {}
     asked = []
@@ -395,23 +391,17 @@ class FakeCamera:
         self.key = (index, api)
         FakeCamera.asked.append(self.key)
         self.state = FakeCamera.world.get(self.key)
-        self.undecoded = False
-        self.settings = []
 
     def isOpened(self):
-        return self.state in ("opens", "reads", "jpeg", "junk")
+        return self.state in ("opens", "reads")
 
     def read(self):
-        if self.state in ("reads", "jpeg", "junk"):
-            if self.undecoded and self.state == "jpeg":
-                return True, JPEG.copy()
-            if self.undecoded and self.state == "junk":
-                return True, np.full((1, 64), 7, np.uint8)
+        if self.state == "reads":
             return True, np.zeros((4, 4, 3), np.uint8)
         return False, None
 
     def grab(self):
-        return self.state in ("reads", "jpeg", "junk")
+        return self.state == "reads"
 
     def retrieve(self):
         return self.read()
@@ -422,9 +412,6 @@ class FakeCamera:
                 cv2.CAP_PROP_FPS: 30.0, cv2.CAP_PROP_FOURCC: capture.fourcc_code("MJPG")}.get(prop, 0)
 
     def set(self, prop, value):
-        self.settings.append((prop, value))
-        if prop == capture.cv2.CAP_PROP_CONVERT_RGB:
-            self.undecoded = not value
         return True
 
     def release(self):
@@ -494,66 +481,192 @@ class CardDiscovery(unittest.TestCase):
         self.assertEqual((actual["backend"], actual["api"]), ("Media Foundation", MSMF))
 
 
-class DecodingAndApiChoice(unittest.TestCase):
-    """DirectShow's MJPG, decoded here instead of by Windows's MJPEG Decompressor filter and then
-    flipped from bottom-up RGB; and the switch that compares the two APIs on one card."""
+class FakeDirectShow:
+    """OpenCV's DirectShow capture as far as formats go, transcribed from
+    modules/videoio/src/cap_dshow.cpp (OpenCV 4.x), so the order of settings can be tried without
+    a card.
 
-    def open(self, state, api, fourcc="MJPG"):
-        FakeCamera.world = {(0, api): state}
-        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
-            feed = capture.open_device(0, fourcc, 1920, 1080, 30, api)
-            picture = feed.read() if feed else (False, None)
-        return feed, picture
+    The parts that matter, from the source:
+      * setProperty(FRAME_WIDTH / FRAME_HEIGHT) records the value; once both are known, and the
+        size *or the FOURCC* differs from the device's, the device is set up again with
+        setupDeviceFourcc(m_width, m_height, m_fourcc). Afterwards m_fourcc goes back to -1.
+      * setProperty(FOURCC) records it and takes m_width/m_height from the current size, so it
+        sets the device up at once.
+      * setProperty(FPS) remembers the rate (setIdealFramerate) and sets the device up again with
+        setupDevice(m_index, w, h) -- no FOURCC.
+      * A set-up with no FOURCC asks for RGB24 and, refused, takes the first type in videoInput's
+        list that the device offers at that size: RGB24, RGB32, RGB555, RGB565, YUY2, ... MJPG.
+      * getFPS() returns the rate *asked for*; getFourcc() the type actually set up.
+    """
 
-    def test_directshow_hands_over_compressed_frames_when_the_driver_agrees(self):
-        feed, (ok, image) = self.open("jpeg", DSHOW)
-        self.assertTrue(feed.jpeg)
-        self.assertTrue(ok)
-        self.assertEqual(image.shape, (8, 8, 3), "decoded here, into an ordinary picture")
+    TYPES = ("RGB24", "RGB32", "RGB555", "RGB565", "YUY2", "YVYU", "YUYV", "IYUV", "UYVY", "YV12",
+             "YVU9", "Y411", "Y41P", "Y211", "AYUV", "MJPG")
+    # An MS2109-class card: YUY2 at every size, but over USB 2.0 only MJPG keeps 1080p at speed.
+    OFFERS = {("YUY2", 640, 480), ("YUY2", 1280, 720), ("YUY2", 1920, 1080),
+              ("MJPG", 640, 480), ("MJPG", 1280, 720), ("MJPG", 1920, 1080)}
 
-    def test_a_driver_that_ignores_the_request_is_read_as_before(self):
-        feed, (ok, image) = self.open("reads", DSHOW)
-        self.assertFalse(feed.jpeg)
-        self.assertEqual(image.shape, (4, 4, 3))
+    def __init__(self, index=0, api=None, offers=None, start=("YUY2", 640, 480)):
+        self.offers = set(offers or self.OFFERS)
+        self.video_type, self.width, self.height = start
+        self.frame_time = -1.0                       # videoInput's requestedFrameTime
+        self.m_width = self.m_height = -1
+        self.m_fourcc = -1
+        self.m_width_set = self.m_height_set = -1
 
-    def test_a_driver_that_sends_junk_goes_back_to_decoding_itself(self):
-        # Half honouring the request is the case to fear: bytes that are neither a picture nor a
-        # JPEG would show nothing at all. The first frame decides, and the request is withdrawn.
-        feed, (ok, image) = self.open("junk", DSHOW)
-        self.assertFalse(feed.jpeg)
-        self.assertEqual(feed.capture.settings[-1], (capture.cv2.CAP_PROP_CONVERT_RGB, 1))
-        self.assertEqual(image.shape, (4, 4, 3))
+    def fps(self):
+        return 1e7 / self.frame_time if self.frame_time > 0 else 0
 
-    def test_media_foundation_is_left_to_decode_for_itself(self):
-        # Its decoder may be the GPU's; nothing here would beat that.
-        feed, _ = self.open("jpeg", MSMF)
-        self.assertFalse(feed.jpeg)
-        self.assertNotIn(capture.cv2.CAP_PROP_CONVERT_RGB, [prop for prop, _ in feed.capture.settings])
+    def _setup(self, width, height, fourcc):
+        tried = fourcc if fourcc != -1 else "RGB24"
+        if (tried, width, height) in self.offers:
+            self.video_type = tried
+        else:
+            self.video_type = next(kind for kind in self.TYPES if (kind, width, height) in self.offers)
+        self.width, self.height = width, height
 
-    def test_uncompressed_formats_are_never_asked_for_undecoded(self):
-        feed, _ = self.open("jpeg", DSHOW, fourcc="YUY2")
-        self.assertFalse(feed.jpeg)
+    def set(self, prop, value):
+        cv2 = capture.cv2
+        if prop == cv2.CAP_PROP_FRAME_WIDTH:
+            self.m_width = round(value)
+        elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
+            self.m_height = round(value)
+        elif prop == cv2.CAP_PROP_FOURCC:
+            self.m_fourcc = capture.fourcc_text(value)
+            self.m_width, self.m_height = self.width, self.height
+        elif prop == cv2.CAP_PROP_FPS:
+            fps = round(value)
+            if fps != self.fps():
+                self.frame_time = 1e7 / fps
+                if self.m_width_set > 0 and self.m_height_set > 0:
+                    self._setup(self.m_width_set, self.m_height_set, -1)
+                else:
+                    self._setup(self.width, self.height, -1)
+            return True
+        else:
+            return False
+        if self.m_width > 0 and self.m_height > 0:
+            if (self.m_width, self.m_height) != (self.width, self.height) or self.m_fourcc != self.video_type:
+                self._setup(self.m_width, self.m_height, self.m_fourcc)
+            self.m_width_set, self.m_height_set = self.m_width, self.m_height
+            self.m_width = self.m_height = self.m_fourcc = -1
+        return True
 
-    def test_the_status_bar_is_told_who_decodes(self):
-        FakeCamera.world = {(0, DSHOW): "jpeg"}
-        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
-            feed, actual = capture.negotiate(0, ("MJPG", 1920, 1080, 30), DSHOW)
-        self.assertEqual((actual["backend"], actual["decoded"]), ("DirectShow", "here"))
+    def get(self, prop):
+        cv2 = capture.cv2
+        return {cv2.CAP_PROP_FRAME_WIDTH: self.width, cv2.CAP_PROP_FRAME_HEIGHT: self.height,
+                cv2.CAP_PROP_FPS: self.fps(),
+                cv2.CAP_PROP_FOURCC: capture.fourcc_code(self.video_type)}.get(prop, 0)
 
-    def test_draining_does_not_decode_the_frames_it_throws_away(self):
-        # grab() skips stale frames; only the one finally retrieved is worth 11 ms of decoding.
-        feed, _ = self.open("jpeg", DSHOW)
-        with unittest.mock.patch.object(capture.cv2, "imdecode", wraps=capture.cv2.imdecode) as decode:
-            for _ in range(3):
-                feed.grab()
-            feed.retrieve()
-        self.assertEqual(decode.call_count, 1)
+    def isOpened(self):
+        return True
+
+    def read(self):
+        return True, np.zeros((self.height, self.width, 3), np.uint8)
+
+    def release(self):
+        pass
+
+
+class DirectShowFormatOrder(unittest.TestCase):
+    """Why 0.4.1 and 0.4.2 crawled on DirectShow, and that they no longer do.
+
+    A model of OpenCV's own code is the next best thing to the card, and the model is only worth
+    trusting if it reproduces the failure: so the first test shows the old order landing on YUY2.
+    """
+
+    def configure(self, order, **device):
+        card = FakeDirectShow(**device)
+        cv2 = capture.cv2
+        steps = {"fourcc": (cv2.CAP_PROP_FOURCC, capture.fourcc_code("MJPG")),
+                 "width": (cv2.CAP_PROP_FRAME_WIDTH, 1920), "height": (cv2.CAP_PROP_FRAME_HEIGHT, 1080),
+                 "fps": (cv2.CAP_PROP_FPS, 30)}
+        for name in order:
+            card.set(*steps[name])
+        return card
+
+    def test_the_old_order_left_the_card_on_yuy2(self):
+        card = self.configure(("fourcc", "width", "height", "fps"))
+        self.assertEqual((card.video_type, card.width, card.height), ("YUY2", 1920, 1080))
+        self.assertEqual(round(card.fps()), 30, "and went on reporting the 30 it was asked for")
+
+    def test_this_order_gets_mjpg_at_1080p_and_30(self):
+        card = FakeDirectShow()
+        capture._configure(card, DSHOW, "MJPG", 1920, 1080, 30)
+        self.assertEqual((card.video_type, card.width, card.height, round(card.fps())),
+                         ("MJPG", 1920, 1080, 30))
+
+    def test_it_holds_when_the_card_starts_out_at_1080p(self):
+        # A card already at the size asked for skips the size step's set-up entirely.
+        card = FakeDirectShow(start=("YUY2", 1920, 1080))
+        capture._configure(card, DSHOW, "MJPG", 1920, 1080, 30)
+        self.assertEqual((card.video_type, card.width, card.height), ("MJPG", 1920, 1080))
+
+    def test_media_foundation_keeps_its_own_order(self):
+        calls = []
+        recorder = unittest.mock.Mock(set=lambda prop, value: calls.append(prop) or True)
+        capture._configure(recorder, MSMF, "MJPG", 1920, 1080, 30)
+        cv2 = capture.cv2
+        self.assertEqual(calls[:4], [cv2.CAP_PROP_FOURCC, cv2.CAP_PROP_FRAME_WIDTH,
+                                     cv2.CAP_PROP_FRAME_HEIGHT, cv2.CAP_PROP_FPS])
+
+    def test_a_card_that_cannot_do_mjpg_at_1080p_moves_down_the_ladder(self):
+        # Refusing the quiet downgrade is what keeps a slideshow off the screen: rather than YUY2
+        # at 1080p, the next rung -- MJPG at 720p -- is tried and taken.
+        offers = FakeDirectShow.OFFERS - {("MJPG", 1920, 1080)}
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture",
+                                        lambda index, api: FakeDirectShow(offers=offers)):
+            capture_, actual = capture.negotiate(0, ("MJPG", 1920, 1080, 30), DSHOW)
+        self.assertEqual((actual["fourcc"], actual["width"], actual["height"]), ("MJPG", 1280, 720))
 
     def test_the_api_choice_narrows_the_search(self):
         self.assertEqual([api for _, api in capture.backends_for("dshow")], [DSHOW])
         self.assertEqual([api for _, api in capture.backends_for("msmf")], [MSMF])
         self.assertEqual([api for _, api in capture.backends_for("auto")], [DSHOW, MSMF])
         self.assertEqual(capture.backends_for("something old"), capture.BACKENDS)
+
+
+class Draining(unittest.TestCase):
+    """DirectShow keeps one newest frame and its grab() never waits, so draining it only counted
+    skips that never happened; Media Foundation queues, so it still drains."""
+
+    def run_worker(self, api):
+        FakeCamera.world = {(0, api): "reads"}
+        worker = capture.CaptureWorker(lambda frame, at=None: None)
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+            worker.start(0, "MJPG", 1920, 1080, 30, api)
+            deadline = time.monotonic() + 3
+            while worker.frames < 20 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            worker.stop()
+        return worker
+
+    def test_directshow_is_read_without_draining(self):
+        worker = self.run_worker(DSHOW)
+        self.assertGreaterEqual(worker.frames, 20)
+        self.assertFalse(worker._draining)
+        self.assertEqual(worker.dropped_stale, 0)
+
+    def test_media_foundation_still_drains(self):
+        self.assertTrue(self.run_worker(MSMF)._draining)
+
+
+class FrameHandOff(unittest.TestCase):
+    """Frames leave the capture thread ready to draw, so the window thread only draws."""
+
+    def test_a_frame_arrives_in_the_painters_own_format_with_its_colours(self):
+        from PySide6.QtGui import QColor, QImage
+        from capturekvm.app import FrameSlot
+        frame = np.zeros((2, 3, 3), np.uint8)
+        frame[0, 0] = (255, 0, 0)        # BGR: blue
+        frame[1, 2] = (0, 0, 255)        # BGR: red
+        slot = FrameSlot()
+        slot.put(frame)
+        (image, buffer), _ = slot.take()
+        self.assertEqual(image.format(), QImage.Format_RGB32)
+        self.assertEqual((image.width(), image.height()), (3, 2))
+        self.assertEqual(image.pixelColor(0, 0), QColor(0, 0, 255))
+        self.assertEqual(image.pixelColor(2, 1), QColor(255, 0, 0))
+        self.assertIsNone(buffer.base, "the image wraps a buffer of its own, not OpenCV's")
 
 
 class EmptyCardList(unittest.TestCase):

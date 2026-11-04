@@ -14,9 +14,10 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal
+import cv2
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QCursor, QDesktopServices, QGuiApplication, QImage, QKeySequence,
-                           QPainter, QPixmap)
+                           QPainter)
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
@@ -60,20 +61,32 @@ class FrameSlot(QObject):
         self.dropped = 0
 
     def put(self, frame, captured_at=None) -> None:
-        height, width = frame.shape[:2]
-        # copy(): the numpy buffer belongs to OpenCV and is reused on the next read.
-        image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_BGR888).copy()
+        """Called on the capture thread. The frame leaves it ready to draw.
+
+        Converted here to 32-bit BGRX, which is QImage's Format_RGB32 byte for byte and the
+        format Qt's raster painter draws without converting. The window thread used to get BGR888
+        and turn it into a QPixmap itself, which on the thread that also handles the keyboard and
+        mouse cost 7.6 ms a 1080p frame in a 720p window against 2.8 ms now; the conversion moved
+        to this thread costs about 2 ms, a copy it was making anyway.
+
+        cvtColor writes a new array, which nothing else holds, so the QImage can wrap it rather
+        than copy it again; the array goes along with the image to keep it alive.
+        """
+        bgrx = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+        height, width = bgrx.shape[:2]
+        image = QImage(bgrx.data, width, height, bgrx.strides[0], QImage.Format_RGB32)
         with self._lock:
             if self._image is not None:
                 self.dropped += 1
-            self._image = image
+            self._image = (image, bgrx)
             self._captured_at = captured_at
         self.arrived.emit()
 
     def take(self):
+        """((image, buffer), captured_at), or (None, None). Keep the buffer as long as the image."""
         with self._lock:
-            image, self._image = self._image, None
-            return image, self._captured_at
+            frame, self._image = self._image, None
+            return frame, self._captured_at
 
 
 class VideoView(QWidget):
@@ -87,7 +100,7 @@ class VideoView(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumSize(QSize(480, 270))
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
-        self._pixmap = None
+        self._frame = None          # FrameSlot's (image, buffer), or None for the placeholder
         self._placeholder = None
         self.driving = False
         self._centre = QPoint()
@@ -99,12 +112,14 @@ class VideoView(QWidget):
 
     # --- painting ---
 
-    def show_image(self, image: QImage) -> None:
-        self._pixmap = QPixmap.fromImage(image)
+    def show_image(self, frame) -> None:
+        """`frame` is FrameSlot's (image, buffer): the QImage wraps the buffer rather than owning
+        a copy of it, so both are held until the next frame replaces them."""
+        self._frame = frame
         self.update()
 
     def show_text(self, text: str) -> None:
-        self._pixmap = None
+        self._frame = None
         self._placeholder = text
         self.update()
 
@@ -115,31 +130,35 @@ class VideoView(QWidget):
         # between the card and a picture that looks right.
         painter.setRenderHint(QPainter.SmoothPixmapTransform, self._settings.get("smooth_scaling", True))
         painter.fillRect(self.rect(), Qt.black)
-        if self._pixmap is None:
+        if self._frame is None:
             painter.setPen(Qt.gray)
             # Wrapped and inset: the placeholder is where an empty card list explains itself, in
             # a paragraph rather than a line.
             painter.drawText(self.rect().adjusted(48, 48, -48, -48), Qt.AlignCenter | Qt.TextWordWrap,
                              self._placeholder or "no picture")
             return
+        # drawImage, not drawPixmap: the image is already in the raster painter's own format, and
+        # turning it into a QPixmap first was a conversion of every frame on this thread.
+        image = self._frame[0]
         target = self.rect()
         if self._settings.get("scale_mode", "fit") == "actual":
             # 1:1. Nothing is resampled at all, which is as sharp as the card can look; the
             # picture is centred and clipped if the window is smaller than it.
-            painter.drawPixmap(
-                target.x() + (target.width() - self._pixmap.width()) // 2,
-                target.y() + (target.height() - self._pixmap.height()) // 2,
-                self._pixmap,
+            painter.drawImage(
+                target.x() + (target.width() - image.width()) // 2,
+                target.y() + (target.height() - image.height()) // 2,
+                image,
             )
         elif self._settings.get("keep_aspect", True):
-            scaled = self._pixmap.size().scaled(target.size(), Qt.KeepAspectRatio)
-            painter.drawPixmap(
-                target.x() + (target.width() - scaled.width()) // 2,
-                target.y() + (target.height() - scaled.height()) // 2,
-                scaled.width(), scaled.height(), self._pixmap,
+            scaled = image.size().scaled(target.size(), Qt.KeepAspectRatio)
+            painter.drawImage(
+                QRect(target.x() + (target.width() - scaled.width()) // 2,
+                      target.y() + (target.height() - scaled.height()) // 2,
+                      scaled.width(), scaled.height()),
+                image,
             )
         else:
-            painter.drawPixmap(target, self._pixmap)
+            painter.drawImage(target, image)
         if self.driving:
             painter.setPen(Qt.red)
             painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
@@ -686,10 +705,10 @@ class MainWindow(QMainWindow):
         self.close()
 
     def _drain_frames(self) -> None:
-        image, captured_at = self.slot.take()
-        if image is None:
+        frame, captured_at = self.slot.take()
+        if frame is None:
             return
-        self.view.show_image(image)
+        self.view.show_image(frame)
         if captured_at is not None:
             # Device to painted, which is what this app controls. It is not glass-to-glass: the
             # card's own delay before the frame reaches USB cannot be seen from here, and is
@@ -1096,8 +1115,6 @@ class MainWindow(QMainWindow):
             # uncompressed video at a fraction of the rate asked for; so say so when it has.
             short = f" (asked {asked})" if asked and 0 < fps < asked * 0.66 else ""
             how = shape.get("backend", "")
-            if shape.get("decoded") == "here":
-                how += ", decoded here"
             self.status_card.setText(
                 f"card: {shape['width']}x{shape['height']} {shape['fourcc']} {fps:.0f} fps{short}"
                 + (f" · {how}" if how else "")

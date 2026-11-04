@@ -228,109 +228,78 @@ def list_devices(limit: int = PROBE_LIMIT, backends=BACKENDS) -> list:
     return found
 
 
-def _is_jpeg(frame) -> bool:
-    """Whether what a capture handed back is a compressed JPEG rather than a picture: one row of
-    bytes that starts with JPEG's start-of-image marker."""
-    if frame is None or getattr(frame, "dtype", None) != np.uint8:
-        return False
-    if frame.ndim == 3 or frame.size < 4:
-        return False
-    flat = frame.reshape(-1)
-    return int(flat[0]) == 0xFF and int(flat[1]) == 0xD8
+def _configure(capture, api: int, fourcc: str, width: int, height: int, fps: int) -> None:
+    """Ask for a format, a size and a rate, in the order the back end needs them.
 
+    Media Foundation picks the stream from the FOURCC, so that goes first, then the size, then
+    the rate.
 
-class Feed:
-    """An opened capture, and who turns its frames into pictures.
+    DirectShow is the other way round, and getting it wrong is what made 0.4.1 and 0.4.2 crawl.
+    In OpenCV's DirectShow code (modules/videoio/src/cap_dshow.cpp) setting the FOURCC re-sets the
+    device up at its current size and then forgets the FOURCC it was given; the next size change
+    re-sets the device up again with no format at all, and with no format it takes the first of a
+    list that runs RGB24, RGB32, RGB555, RGB565, YUY2 ... and reaches MJPG sixteenth. A rate
+    change re-sets it up with no format either. So FOURCC, width, height, rate -- this file's
+    order until now -- left a USB 2.0 card on uncompressed YUY2 at 1080p: about five frames a
+    second, while the API went on reporting the 30 it was asked for.
 
-    With `jpeg`, the capture hands back each MJPG frame still compressed and it is decoded here,
-    by OpenCV's libjpeg-turbo. Otherwise the capture decodes, and what it returns is used as is.
-    Duck-typed as the cv2.VideoCapture CaptureWorker reads, so the worker does not know which; and
-    `grab` stays cheap either way, because only the frame that is finally retrieved is decoded.
+    The FOURCC therefore goes last on DirectShow. It re-sets the device up at the size already
+    asked for, keeping the requested rate, which DirectShow remembers across set-ups.
     """
+    def size():
+        if width and height:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
 
-    def __init__(self, capture, jpeg: bool = False):
-        self.capture = capture
-        self.jpeg = jpeg
+    def rate():
+        if fps:
+            capture.set(cv2.CAP_PROP_FPS, int(fps))
 
-    def get(self, prop):
-        return self.capture.get(prop)
+    def format_():
+        if fourcc:
+            capture.set(cv2.CAP_PROP_FOURCC, fourcc_code(fourcc))
 
-    def grab(self):
-        return self.capture.grab()
-
-    def retrieve(self):
-        return self._picture(*self.capture.retrieve())
-
-    def read(self):
-        return self._picture(*self.capture.read())
-
-    def release(self):
-        self.capture.release()
-
-    def _picture(self, ok, frame):
-        if not self.jpeg or not ok or frame is None:
-            return ok, frame
-        image = cv2.imdecode(frame, cv2.IMREAD_COLOR)
-        return image is not None, image
-
-
-def _compressed(capture, fourcc: str, api: int) -> bool:
-    """Ask DirectShow for the card's MJPG frames undecoded. True if it agreed and they arrive as
-    JPEG; otherwise it is put back to decoding them itself.
-
-    Left to itself, DirectShow decodes MJPG with Windows's MJPEG Decompressor filter and then
-    converts to bottom-up RGB, which OpenCV flips the right way up: a decoder this PC's OpenCV
-    beats with libjpeg-turbo, and a full-frame copy that is pure overhead. Media Foundation is
-    left alone: its decoder may be the GPU's, which nothing here would beat.
-
-    Not every driver honours the request, and one that half honours it hands back bytes that are
-    neither a picture nor a JPEG. So the first frame decides, and anything else goes back to
-    the ordinary path rather than to a capture that cannot be shown.
-    """
-    if api != cv2.CAP_DSHOW or fourcc != "MJPG":
-        return False
-    try:
-        if not capture.set(cv2.CAP_PROP_CONVERT_RGB, 0):
-            return False
-        ok, frame = capture.read()
-        if ok and _is_jpeg(frame) and cv2.imdecode(frame, cv2.IMREAD_COLOR) is not None:
-            return True
-    except cv2.error:
-        pass
-    capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
-    return False
+    steps = (size, rate, format_) if api == cv2.CAP_DSHOW else (format_, size, rate)
+    for step in steps:
+        step()
+    # Every buffered frame is a frame of lag. Either back end may refuse; asking costs nothing.
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 
 def open_device(index: int, fourcc: str, width: int, height: int, fps: int, api: int = cv2.CAP_DSHOW):
-    """One configured capture as a Feed, or None. The order matters: both back ends pick the
-    stream format from the FOURCC, so that goes first, then the size, then the rate."""
+    """One configured capture, or None.
+
+    On DirectShow the format it ended up with is read back, and a capture that did not get the
+    one asked for is refused rather than used: a card quietly running YUY2 where MJPG was asked
+    is the five-frames-a-second failure above, and refusing it lets the format ladder try the next
+    rung instead of showing a slideshow. DirectShow's FOURCC read-back is the format it actually
+    set up (OpenCV keeps it as the device's video type), which is not true of its frame rate.
+    """
     capture = cv2.VideoCapture(index, api)
     if not capture.isOpened():
         capture.release()
         return None
     try:
-        if fourcc:
-            capture.set(cv2.CAP_PROP_FOURCC, fourcc_code(fourcc))
-        if width and height:
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
-        if fps:
-            capture.set(cv2.CAP_PROP_FPS, int(fps))
-        # Every buffered frame is a frame of lag. Either back end may refuse; asking costs nothing.
-        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        feed = Feed(capture, _compressed(capture, fourcc, api))
-        ok, frame = feed.read()
+        _configure(capture, api, fourcc, width, height, fps)
+        if api == cv2.CAP_DSHOW and fourcc:
+            got = fourcc_text(capture.get(cv2.CAP_PROP_FOURCC))
+            if got.upper() != fourcc.upper():
+                LOGGER.info("capture %d: asked DirectShow for %s, it set up %s; trying the next format",
+                            index, fourcc, got)
+                capture.release()
+                return None
+        ok, frame = capture.read()
         if not ok or frame is None:
             capture.release()
             return None
-        return feed
+        return capture
     except cv2.error:
         capture.release()
         return None
 
 
 def negotiate(index: int, preferred=None, api=None):
-    """Opens `index` as a Feed with the first format that reads a frame, preferring `preferred` (a
+    """Opens `index` with the first format that reads a frame, preferring `preferred` (a
     (fourcc, width, height, fps) tuple) and falling back down FORMAT_LADDER.
 
     With `api`, the back end the device list found this card through, only that one is used.
@@ -352,8 +321,6 @@ def negotiate(index: int, preferred=None, api=None):
                     "fps": round(float(capture.get(cv2.CAP_PROP_FPS)), 1),
                     "backend": BACKEND_NAMES.get(backend, str(backend)),
                     "api": backend,
-                    # Who decodes the MJPG: this app with libjpeg-turbo, or the API itself.
-                    "decoded": "here" if capture.jpeg else "by Windows",
                     "asked": {"fourcc": fourcc, "width": width, "height": height, "fps": fps},
                 }
                 LOGGER.info("capture %d opened: %s", index, actual)
@@ -385,7 +352,10 @@ class CaptureWorker:
         self.measured_fps = 0.0
         self.frames = 0
         self.dropped_stale = 0      # queued frames thrown away to show a newer one
+        # Whether to skip queued frames to reach the newest. The setting; whether it is acted on
+        # depends on the API the card opened through, see _run.
         self.drain = True
+        self._draining = True
 
     def start(self, index: int, fourcc: str = "MJPG", width: int = 1920, height: int = 1080, fps: int = 30,
               api=None) -> None:
@@ -424,6 +394,12 @@ class CaptureWorker:
                     break
                 continue
             self.format = actual
+            # DirectShow keeps only the newest frame -- its callback overwrites one buffer, and
+            # retrieve() waits for the next -- so there is no queue to skip ahead in. Its grab()
+            # also returns at once without waiting for anything, which _newest reads as "frames
+            # are queued" and counted four phantom skips a frame. Draining is for Media
+            # Foundation, whose reader does queue.
+            self._draining = self.drain and actual.get("api") != cv2.CAP_DSHOW
             self._on_status({"state": "open", "index": index, "format": actual})
             try:
                 self._pump(capture)
@@ -446,7 +422,7 @@ class CaptureWorker:
 
         Without it the picture is as old as the deepest buffer in the chain, which for a KVM is
         the difference between usable and not."""
-        if not self.drain:
+        if not self._draining:
             ok, frame = capture.read()
             return ok, frame, 0
 

@@ -149,14 +149,27 @@ bar names the API in use with the measured frame rate and delay, so the two can 
 card by switching, stopping and starting.
 
 DirectShow is not slower by design: OpenCV's DirectShow path keeps only the newest frame, with no
-queue to fall behind in. What it does add is decoding — left to itself it pushes each MJPG frame
-through Windows's old *MJPEG Decompressor* filter and then flips bottom-up RGB the right way up. So
-CaptureKVM asks DirectShow for the frames still compressed and decodes them itself with
-libjpeg-turbo (about 11 ms for a full 1080p frame on the PC this was written on), and only the frame
-that is shown gets decoded. The status bar says *decoded here* when that is happening; a driver that
-will not hand frames over compressed is read the ordinary way. The lag people usually blame on
-DirectShow is a card that fell back to uncompressed YUY2 — 1080p at five frames a second — and the
-status bar flags a rate well below the one asked for.
+queue to fall behind in. What makes it crawl is the format. A USB 2.0 card has to send 1080p as MJPG;
+uncompressed YUY2 at 1080p is about five frames a second. And in OpenCV's DirectShow code the order
+the settings are given in decides which one you get: setting the size after the format quietly
+re-sets the card up *with no format*, and with no format it takes the first of RGB24, RGB32, RGB555,
+RGB565, YUY2 … which a capture card offers, long before MJPG — while still reporting the 30 frames a
+second it was asked for. **0.4.1 and 0.4.2 set the format first, so on DirectShow they ran an
+MS2109-class card at about five frames a second.** From 0.4.3 the format is set last on DirectShow,
+which re-sets the card up with MJPG at the size already chosen, and the format the card actually got
+is read back: one that is not what was asked for is refused, and the next format down is tried
+rather than showing a slideshow. `FakeDirectShow` in the client tests is OpenCV's logic transcribed
+from its source, and reproduces both the old failure and the fix. The status bar's frame rate is
+measured, not reported, and flags one well below what was asked for.
+
+0.4.1 also claimed to decode DirectShow's MJPG itself to skip Windows's decoder. It never did:
+OpenCV's DirectShow code decodes MJPG through Windows whatever it is asked, so the request was always
+refused and the ordinary path taken. That code is gone.
+
+**Tearing.** A torn picture is usually in the HDMI signal itself: a game running with vsync off on the
+PC tears there too, and the card captures exactly what it is sent. Turn vsync on in the game, or cap
+its frame rate to the display's, and the capture stops tearing. The app itself shows only whole
+frames: each one is copied off the capture thread before the window draws it.
 
 **If the card is not listed.** Up to 0.4.0 only Media Foundation was tried, and cheap HDMI grabbers
 are the devices it most often refuses, so a card that showed a picture in every other app could be
