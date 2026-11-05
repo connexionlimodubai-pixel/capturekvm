@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "windows"))
 import numpy as np  # noqa: E402
 
 from capturekvm import capture, clipboard, discover, ffcapture, launcher, padwire, process, store  # noqa: E402
-from core import pairing  # noqa: E402
+from core import pairing, protocol  # noqa: E402
 
 
 def ramp(low: int, high: int, height: int = 240, width: int = 320) -> np.ndarray:
@@ -1019,6 +1019,60 @@ class Draining(unittest.TestCase):
 
     def test_media_foundation_still_drains(self):
         self.assertTrue(self.run_worker(MSMF)._draining)
+
+
+class DrivingTheMouse(unittest.TestCase):
+    """Moves of the mouse reach the PC whether or not a button is held.
+
+    0.4.4 and before sent the pointer's movement only while a button was down: Qt drops a
+    button-less move unless the widget tracks the mouse, and grabbing the mouse does not change
+    that. The moves here go through Qt's window system, as a real mouse's do, which is the path
+    that dropped them; an event handed straight to the widget would have passed either way."""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def driving_view(self):
+        from PySide6.QtTest import QTest
+        from capturekvm.app import VideoView
+        sent = []
+        view = VideoView(sent.append, {})
+        view.resize(640, 360)
+        view.show()
+        QTest.qWaitForWindowExposed(view)
+        view.set_driving(True)
+        self.addCleanup(view.close)
+        self.addCleanup(view.set_driving, False)
+        return view, sent
+
+    def moves(self, sent):
+        return [(m["data"]["dx"], m["data"]["dy"]) for m in sent if m["type"] == protocol.MSG_MOUSEMOVE]
+
+    def test_a_move_with_no_button_held_moves_the_pointer(self):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtTest import QTest
+        view, sent = self.driving_view()
+        QTest.mouseMove(view, view.mapFromGlobal(view._centre) + QPoint(25, 10))
+        self.app.processEvents()
+        self.assertEqual(self.moves(sent), [(25, 10)])
+
+    def test_a_drag_still_moves_it_and_holds_the_button(self):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+        view, sent = self.driving_view()
+        centre = view.mapFromGlobal(view._centre)
+        QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, centre)
+        QTest.mouseMove(view, centre + QPoint(-12, 7))
+        QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, centre + QPoint(-12, 7))
+        self.app.processEvents()
+        kinds = [m["type"] for m in sent]
+        self.assertEqual(kinds[0], protocol.MSG_MOUSEDOWN)
+        self.assertIn((-12, 7), self.moves(sent))
+        self.assertEqual(kinds[-1], protocol.MSG_MOUSEUP)
 
 
 class FrameHandOff(unittest.TestCase):

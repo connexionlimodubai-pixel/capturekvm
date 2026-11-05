@@ -100,6 +100,11 @@ class VideoView(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumSize(QSize(480, 270))
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        # Without this Qt delivers a mouse move only while a button is held -- grabbing the
+        # mouse does not change that -- so the PC's pointer moved only during a drag, and an
+        # ordinary move of the mouse did nothing at all. mouseMoveEvent ignores moves when not
+        # driving, so tracking all the time costs nothing.
+        self.setMouseTracking(True)
         self._frame = None          # FrameSlot's (image, buffer), or None for the placeholder
         self._placeholder = None
         self.driving = False
