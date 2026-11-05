@@ -77,7 +77,8 @@ import pathlib, sys
 root = pathlib.Path('..').resolve()
 win_app, core = root / 'beamer-vigem' / 'win_app', root / 'beamer-vigem' / 'core'
 names = ['kvm_bridge_win', 'capturekvm.launcher', 'capturekvm.app', 'capturekvm.link',
-         'capturekvm.capture', 'capturekvm.gamepad', 'capturekvm.audio', 'cv2', 'numpy',
+         'capturekvm.capture', 'capturekvm.ffcapture', 'capturekvm.gamepad', 'capturekvm.audio',
+         'av', 'av.container', 'av.codec', 'av.video', 'cv2', 'numpy',
          'sounddevice', 'nacl', 'segno', 'win32com.client']
 names += sorted(p.stem for p in win_app.glob('*.py') if p.stem != 'kvm_bridge_win')
 names += sorted(f'core.{p.stem}' for p in core.glob('*.py') if p.stem != '__init__')
@@ -119,6 +120,12 @@ $wanted = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $PSScriptRoot 
 $shipped = (Get-FileHash -Algorithm SHA256 -LiteralPath $client).Hash
 if ($shipped -ne $wanted) { throw "the bundled ViGEmClient.dll is not the one fetched" }
 Write-Host "  ok  ViGEmClient.dll is in the build, where host mode looks for it" -ForegroundColor Green
+
+# FFmpeg's DirectShow input lives in avdevice, which PyAV's hook copies in as data rather than as
+# a binary; a build without it would fall back to OpenCV without a word, and lag again.
+$avdevice = @(Get-ChildItem -Path (Join-Path $dist "_internal\av.libs") -Filter "avdevice-*.dll" -ErrorAction SilentlyContinue)
+if ($avdevice.Count -eq 0) { throw "FFmpeg's avdevice DLL is not in the build; the card would be read through OpenCV" }
+Write-Host "  ok  FFmpeg's DirectShow input ($($avdevice[0].Name)) is in the build" -ForegroundColor Green
 
 if ($Zip) {
     $archive = Join-Path $PSScriptRoot "dist\CaptureKVM-windows-x64.zip"

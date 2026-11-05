@@ -54,15 +54,19 @@ Not redistributed here — resolved at build time.
 | [Bouncy Castle](https://www.bouncycastle.org/) (`bcprov-jdk18on`) | MIT-style (Bouncy Castle Licence) | Android: X25519, ChaCha20-Poly1305 |
 | [PySide6](https://doc.qt.io/qtforpython/) | LGPL-3.0 | Windows: the window |
 | [PyNaCl](https://github.com/pyca/pynacl) | Apache-2.0 (bundles libsodium — ISC) | Windows: X25519, ChaCha20-Poly1305, via the vendored core |
-| [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | Windows: UVC capture through Media Foundation and DirectShow |
+| [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | Windows: the fallback capture paths, through OpenCV's DirectShow and Media Foundation back ends, and frame conversion |
+| [PyAV](https://github.com/PyAV-Org/PyAV) 19 (`av`) | BSD-3-Clause | Windows: reading the capture card through FFmpeg's DirectShow input and decoding its MJPG |
+| [FFmpeg](https://ffmpeg.org/) 9, as built into PyAV's Windows wheel ([build scripts](https://github.com/PyAV-Org/pyav-ffmpeg)) | LGPL-3.0-or-later as configured; the wheel's DLLs also include libx264 and libx265 (GPL-2.0-or-later), dav1d, libvpx, SVT-AV1, libvmaf, libwebp, Opus, libvpl, zlib (BSD/MIT-style) and libiconv (LGPL-2.1) | Windows: capture and MJPG decoding. Only the DirectShow input, the MJPEG and raw-video decoders and swscale are used; the rest are in the bundle because FFmpeg's DLLs are linked against them |
 | [ViGEmClient](https://github.com/nefarius/ViGEmClient) (`ViGEmClient.dll`, x64, as shipped in [vgamepad](https://github.com/yannbouteiller/vgamepad) 0.2.0) | MIT | Windows host mode: plugging the virtual Xbox pad into the ViGEmBus driver. Fetched at build time by `tools/fetch_vigem_client.py`, pinned by SHA-256, not committed |
 | [ViGEmBus](https://github.com/nefarius/ViGEmBus) 1.17.333 (`ViGEmBusSetup_x64.msi`, Nefarius's signed installer, from the same vgamepad archive) | BSD-3-Clause | Windows installer: offered on the PC being watched when no ViGEmBus driver is installed. Fetched and pinned the same way |
 | [Inno Setup](https://jrsoftware.org/isinfo.php) 6.7.4 | Inno Setup License | Builds the Windows installer; not shipped, beyond the setup and uninstall programs every Inno Setup installer carries |
 | [sounddevice](https://python-sounddevice.readthedocs.io/) (bundles PortAudio — MIT) | MIT | Windows: playing the capture card's audio |
 | AndroidX, Material Components, kotlinx-coroutines | Apache-2.0 | Android |
 
-LGPL note: PySide6 and libusb are both LGPL and both are used as separate shared libraries that the
-user can replace, which is what the LGPL asks for.
+LGPL note: PySide6, libusb and FFmpeg are LGPL and all are used as separate shared libraries that
+the user can replace, which is what the LGPL asks for. libx264 and libx265, which PyAV's FFmpeg is
+linked against, are GPL-2.0-or-later, compatible with this project's GPL-3.0; their source is linked
+from PyAV's FFmpeg build scripts above.
 
 ## Beamer itself
 

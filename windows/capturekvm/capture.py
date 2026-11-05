@@ -1,7 +1,8 @@
 """Pulling frames off the USB capture card.
 
-The card is an ordinary UVC device, so Windows sees it as a webcam, and OpenCV can read it through
-either of Windows's two camera APIs (see BACKENDS). Two settings decide whether a cheap HDMI
+The card is an ordinary UVC device, so Windows sees it as a webcam. It is read the way OBS reads it
+-- DirectShow for the frames, FFmpeg for the decoding (see ffcapture) -- and failing that through
+OpenCV, by either of Windows's two camera APIs (see BACKENDS). Two settings decide whether a cheap HDMI
 grabber gives 1080p or a slideshow: the pixel format must be MJPG, because a USB 2.0 card (the
 MS2109 class, which is most of the sub-ten-dollar ones) only offers uncompressed YUY2 at small
 sizes and low rates, and the buffer must be as short as the back end will allow, because every
@@ -21,6 +22,8 @@ import winreg
 import cv2
 import numpy as np
 
+from capturekvm import ffcapture
+
 LOGGER = logging.getLogger("capturekvm.capture")
 
 # Probing indices that hold no device makes the back ends warn once per index. The warnings say
@@ -33,27 +36,40 @@ except AttributeError:
 PROBE_LIMIT = 8
 REOPEN_SECONDS = 1.5
 
-# The two ways Windows offers to read a camera, in the order they are tried.
+# The ways a camera is read, in the order they are tried.
 #
-# DirectShow first. It is what OBS, VLC, AMCap and the card makers' own tools use, so a card that
+# FFmpeg first, when it is there. It reads through DirectShow too, but takes the card's MJPG as it
+# arrives and decodes it itself, as OBS does, where OpenCV's DirectShow hands it to Windows's
+# one-core MJPEG Decompressor -- the lag that remained after 0.4.3 (ffcapture says more). It is not
+# an OpenCV back end: FFMPEG is only this file's name for it, and is never given to
+# cv2.VideoCapture. FFmpeg numbers DirectShow devices in DirectShow's own order, so its index n
+# and DirectShow's index n are the same card, which is what lets negotiate fall back from one to
+# the other.
+#
+# Then OpenCV's DirectShow. It is what OBS, VLC, AMCap and the card makers' own tools use, so a card that
 # shows a picture in any of those shows one here. Media Foundation is the newer API, and cheap
 # HDMI grabbers are the devices it most often fails on: an index that will not open, or one that
 # opens and never delivers a frame. The first version of this file used Media Foundation alone,
 # and a card that worked in every other app on the PC did not appear here at all.
-BACKENDS = (
+FFMPEG = int(cv2.CAP_FFMPEG)
+HAVE_FFMPEG = ffcapture.available()
+BACKENDS = ((("FFmpeg", FFMPEG),) if HAVE_FFMPEG else ()) + (
     ("DirectShow", cv2.CAP_DSHOW),
     ("Media Foundation", cv2.CAP_MSMF),
 )
 BACKEND_NAMES = {api: name for name, api in BACKENDS}
 
-# The choice offered in the window, as the "capture_api" setting stores it. Auto tries both in
-# BACKENDS order; the other two use one API only, which is how the two are compared on a card.
-API_CHOICES = (("auto", "Auto"), ("dshow", "DirectShow"), ("msmf", "Media Foundation"))
+# The choice offered in the window, as the "capture_api" setting stores it. Auto tries each in
+# BACKENDS order; the others use one way only, which is how they are compared on a card.
+API_CHOICES = (("auto", "Auto"),) + ((("ffmpeg", "FFmpeg (like OBS)"),) if HAVE_FFMPEG else ()) + (
+    ("dshow", "DirectShow"), ("msmf", "Media Foundation"))
+_CHOICE_API = {"ffmpeg": FFMPEG, "dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF}
 
 
 def backends_for(choice: str) -> tuple:
-    wanted = {"dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF}.get(choice)
-    return BACKENDS if wanted is None else tuple(item for item in BACKENDS if item[1] == wanted)
+    wanted = _CHOICE_API.get(choice)
+    chosen = tuple(item for item in BACKENDS if item[1] == wanted)
+    return chosen or BACKENDS
 
 # Windows's camera privacy switches. Any one of them at "Deny" refuses the camera to every desktop
 # app, this one included, while a Store app such as Windows Camera may still show the card, which
@@ -171,9 +187,11 @@ def explain_no_devices(windows_sees: list, blocked) -> str:
             "Cameras in Device Manager.")
 
 
-def _probe(index: int, api: int):
+def _probe(index: int, api: int, ffmpeg_devices=None):
     """What one back end makes of one index: None if it will not open, else the format it settled
     on and whether a frame actually came."""
+    if api == FFMPEG:
+        return _probe_ffmpeg(index, ffmpeg_devices or [])
     capture = cv2.VideoCapture(index, api)
     try:
         if not capture.isOpened():
@@ -195,6 +213,49 @@ def _probe(index: int, api: int):
         capture.release()
 
 
+def _describe_ffmpeg(index: int, feed, device: dict) -> dict:
+    return {
+        "index": index,
+        "api": FFMPEG,
+        "backend": BACKEND_NAMES.get(FFMPEG, "FFmpeg"),
+        "name": device["name"],
+        "width": int(feed.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        "height": int(feed.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        "fps": round(float(feed.get(cv2.CAP_PROP_FPS)), 1),
+        "fourcc": feed.fourcc,
+    }
+
+
+def _probe_ffmpeg(index: int, devices: list):
+    """FFmpeg's view of the index'th DirectShow camera, opened at whatever it offers first."""
+    if index >= len(devices):
+        return None
+    feed = ffcapture.FFmpegFeed.open(devices[index]["id"])
+    if feed is None:
+        return None
+    try:
+        ok, frame = feed.read(ffcapture.FIRST_READ_TIMEOUT)
+        seen = _describe_ffmpeg(index, feed, devices[index])
+        seen["reads"] = bool(ok and frame is not None)
+        return seen
+    except Exception:                                   # noqa: BLE001 -- then OpenCV gets its turn
+        LOGGER.exception("probing %s through FFmpeg", devices[index]["name"])
+        return None
+    finally:
+        feed.release()
+
+
+def _ffmpeg_devices(apis) -> list:
+    """FFmpeg's device list, fetched once per scan or open, and only when FFmpeg is to be tried."""
+    if FFMPEG not in apis:
+        return []
+    try:
+        return ffcapture.list_video_devices()
+    except Exception:                                   # noqa: BLE001 -- OpenCV's list still stands
+        LOGGER.exception("listing devices through FFmpeg")
+        return []
+
+
 def list_devices(limit: int = PROBE_LIMIT, backends=BACKENDS) -> list:
     """One entry per camera index, through whichever back end works for it.
 
@@ -208,10 +269,11 @@ def list_devices(limit: int = PROBE_LIMIT, backends=BACKENDS) -> list:
     which opens under neither API, does not hide a card at the index after it.
     """
     found, misses = [], 0
+    ffmpeg_devices = _ffmpeg_devices([api for _, api in backends])
     for index in range(limit):
         best = None
         for _, api in backends:
-            seen = _probe(index, api)
+            seen = _probe(index, api, ffmpeg_devices)
             if seen is None:
                 continue
             if seen["reads"]:
@@ -298,6 +360,25 @@ def open_device(index: int, fourcc: str, width: int, height: int, fps: int, api:
         return None
 
 
+def open_ffmpeg(index: int, fourcc: str, width: int, height: int, fps: int, devices: list):
+    """FFmpeg's capture of the index'th DirectShow camera at one rung of the ladder, or None.
+
+    No read-back check is needed here, unlike OpenCV's DirectShow: FFmpeg only opens a format
+    that has the size and rate asked for, and refuses otherwise. It may give raw video where MJPG
+    was asked, on a USB 3.0 card that can carry raw at that size and rate, which is better still."""
+    if index >= len(devices):
+        return None
+    feed = ffcapture.FFmpegFeed.open(devices[index]["id"], width, height, fps,
+                                     ffcapture.PIXEL_FORMAT_FOR.get((fourcc or "").upper()))
+    if feed is None:
+        return None
+    ok, frame = feed.read(ffcapture.FIRST_READ_TIMEOUT)
+    if not ok or frame is None:
+        feed.release()
+        return None
+    return feed
+
+
 def negotiate(index: int, preferred=None, api=None):
     """Opens `index` with the first format that reads a frame, preferring `preferred` (a
     (fourcc, width, height, fps) tuple) and falling back down FORMAT_LADDER.
@@ -309,9 +390,26 @@ def negotiate(index: int, preferred=None, api=None):
     back end is tried in BACKENDS order.
     """
     ladder = ([tuple(preferred)] if preferred else []) + [item for item in FORMAT_LADDER if item != tuple(preferred or ())]
-    apis = [int(api)] if api else [backend for _, backend in BACKENDS]
+    if api == FFMPEG:
+        # The one exception to "only that API": FFmpeg's index n is DirectShow's index n, so a
+        # card FFmpeg will not open is still worth DirectShow's try. Without PyAV in the build,
+        # a saved FFmpeg choice comes to DirectShow alone.
+        apis = ([FFMPEG] if HAVE_FFMPEG else []) + [cv2.CAP_DSHOW]
+    else:
+        apis = [int(api)] if api else [backend for _, backend in BACKENDS]
+    devices = _ffmpeg_devices(apis)
     for backend in apis:
         for fourcc, width, height, fps in ladder:
+            if backend == FFMPEG:
+                if index >= len(devices):
+                    break
+                feed = open_ffmpeg(index, fourcc, width, height, fps, devices)
+                if feed is not None:
+                    actual = _describe_ffmpeg(index, feed, devices[index])
+                    actual["asked"] = {"fourcc": fourcc, "width": width, "height": height, "fps": fps}
+                    LOGGER.info("capture %d opened: %s", index, actual)
+                    return feed, actual
+                continue
             capture = open_device(index, fourcc, width, height, fps, backend)
             if capture is not None:
                 actual = {
@@ -397,9 +495,10 @@ class CaptureWorker:
             # DirectShow keeps only the newest frame -- its callback overwrites one buffer, and
             # retrieve() waits for the next -- so there is no queue to skip ahead in. Its grab()
             # also returns at once without waiting for anything, which _newest reads as "frames
-            # are queued" and counted four phantom skips a frame. Draining is for Media
-            # Foundation, whose reader does queue.
-            self._draining = self.drain and actual.get("api") != cv2.CAP_DSHOW
+            # are queued" and counted four phantom skips a frame. FFmpeg's feed keeps only the
+            # newest itself, and counts what it skips. Draining is for Media Foundation, whose
+            # reader does queue.
+            self._draining = self.drain and actual.get("api") not in (cv2.CAP_DSHOW, FFMPEG)
             self._on_status({"state": "open", "index": index, "format": actual})
             try:
                 self._pump(capture)
@@ -424,7 +523,8 @@ class CaptureWorker:
         the difference between usable and not."""
         if not self._draining:
             ok, frame = capture.read()
-            return ok, frame, 0
+            take_skipped = getattr(capture, "take_skipped", None)
+            return ok, frame, take_skipped() if callable(take_skipped) else 0
 
         quick = max(0.001, frame_interval / 3.0)
         stale = 0

@@ -471,15 +471,17 @@ class MainWindow(QMainWindow):
         bar.addWidget(QLabel(" Card "))
         bar.addWidget(self.device_box)
 
-        # Which Windows camera API to read the card through. Auto takes the first that works for
-        # each card; the other two are there to compare the two on one card, by the fps and the
-        # milliseconds the status bar shows for each.
+        # How to read the card. Auto takes the first that works for each card; the others are
+        # there to compare them on one card, by the fps and the milliseconds the status bar shows.
+        if capture.HAVE_FFMPEG:
+            self.config.adopt_ffmpeg()
         self.api_box = QComboBox()
         for key, label in capture.API_CHOICES:
             self.api_box.addItem(label, key)
         self.api_box.setCurrentIndex(max(0, self.api_box.findData(self.config.setting("capture_api"))))
-        self.api_box.setToolTip("DirectShow is what OBS and VLC use; Media Foundation is the newer API.\n"
-                                "Auto tries DirectShow first and uses whichever gets a picture.")
+        self.api_box.setToolTip("FFmpeg reads the card as OBS does, decoding MJPG itself.\n"
+                                "DirectShow and Media Foundation are OpenCV's two ways, decoding through Windows.\n"
+                                "Auto tries them in that order and uses the first that gets a picture.")
         self.api_box.currentIndexChanged.connect(self._on_api_changed)
         bar.addWidget(self.api_box)
 
@@ -606,7 +608,9 @@ class MainWindow(QMainWindow):
     def _on_devices_found(self, found: list, names: list, blocked: str = "") -> None:
         self.device_box.clear()
         for device in found:
-            label = (f"#{device['index']}  {device['backend']}  {device['width']}x{device['height']} "
+            # FFmpeg knows the card's name; OpenCV's two back ends only know its number.
+            name = f"  {device['name']}" if device.get("name") else ""
+            label = (f"#{device['index']}  {device['backend']}{name}  {device['width']}x{device['height']} "
                      f"{device['fourcc']} @{device['fps']}")
             if not device.get("reads"):
                 label += "  (no picture yet)"

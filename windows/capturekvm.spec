@@ -53,6 +53,9 @@ CORE_MODULES = ["core"] + sorted(
 # win32 three are host mode's sign-in task and its administrator relaunch.
 INDIRECT = [
     "nacl", "_cffi_backend", "segno",
+    # PyAV, imported inside functions so a build without it still runs. Its own hook brings its
+    # Cython submodules and the FFmpeg DLLs in av.libs.
+    "av", "capturekvm.ffcapture",
     "win32com.client", "pythoncom", "pywintypes",
     "sounddevice", "_sounddevice_data",
 ]
@@ -110,7 +113,7 @@ a = Analysis(
 )
 
 # OpenCV's FFmpeg back end, about 29 MB, is loaded only when a video *file* is read or written.
-# Receiver mode opens a capture device through Media Foundation and never touches it.
+# Receiver mode never does: its FFmpeg is PyAV's, which has the DirectShow input this one lacks.
 a.binaries = [b for b in a.binaries if 'opencv_videoio_ffmpeg' not in b[0].lower()]
 
 # Windows 10 and 11 provide the UCRT and the ApiSet stubs; do not ship copies PyInstaller finds in

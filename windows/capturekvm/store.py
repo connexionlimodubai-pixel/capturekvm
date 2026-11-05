@@ -20,8 +20,9 @@ MACHINE_ID_BYTES = 16
 DEFAULT_SETTINGS = {
     # Capture
     "device_index": 0,
-    "device_api": 0,              # the OpenCV back end the card was found through; 0 means either
-    "capture_api": "auto",        # which APIs to look through: "auto", "dshow" or "msmf"
+    "device_api": 0,              # the back end the card was found through; 0 means any
+    "capture_api": "auto",        # which to look through: "auto", "ffmpeg", "dshow" or "msmf"
+    "ffmpeg_adopted": False,      # whether a pre-0.4.4 choice has been moved onto FFmpeg yet
     "width": 1920,
     "height": 1080,
     "fps": 30,
@@ -203,6 +204,24 @@ class Store:
 
     def settings(self) -> dict:
         return dict(self._data["settings"])
+
+    def adopt_ffmpeg(self) -> bool:
+        """Move a "DirectShow" chosen before 0.4.4 back to Auto, once. True if it moved.
+
+        Up to 0.4.3 the choice was OpenCV's DirectShow or Media Foundation, so "DirectShow" meant
+        "not Media Foundation". Kept as it is, it would also mean "not FFmpeg" -- the fix for the
+        lag -- on exactly the PCs whose owners went looking for a smoother picture. A choice made
+        after this has run is the user's and stays."""
+        with self._lock:
+            settings = self._data["settings"]
+            if settings.get("ffmpeg_adopted"):
+                return False
+            moved = settings.get("capture_api") == "dshow"
+            if moved:
+                settings["capture_api"] = "auto"
+            settings["ffmpeg_adopted"] = True
+            self.save()
+            return moved
 
 
 def _default_name() -> str:

@@ -142,13 +142,25 @@ installs, and is the fork's own window, documented in
 4. **Pair…** — type the PC's address and the six digits Beamer is showing. One minute, one use.
 5. **Connect**, then **Drive (F9)**.
 
-**DirectShow or Media Foundation.** Windows has two camera APIs and the switch beside the card list
-picks between them. *Auto* tries **DirectShow** first — what OBS, VLC and the card makers' own tools
-use — and then **Media Foundation**, and takes whichever gets a picture from each card. The status
-bar names the API in use with the measured frame rate and delay, so the two can be compared on one
-card by switching, stopping and starting.
+**FFmpeg, DirectShow or Media Foundation.** The switch beside the card list picks how the card is
+read. *Auto* tries **FFmpeg** first, then OpenCV's **DirectShow**, then **Media Foundation**, and
+takes whichever gets a picture from each card. The status bar names the one in use with the measured
+frame rate and delay, so they can be compared on one card by switching, stopping and starting.
 
-DirectShow is not slower by design: OpenCV's DirectShow path keeps only the newest frame, with no
+**Why FFmpeg, from 0.4.4.** It is how OBS reads a capture card: DirectShow delivers the card's MJPG
+frames as they arrive, and FFmpeg decodes them. Up to 0.4.3 the card went through OpenCV's
+DirectShow code instead, which always decodes MJPG with Windows's own *MJPEG Decompressor* — one core,
+and at 1080p it cannot always keep up, so frames wait in front of it. That is lag rather than a lower
+frame rate, and it is the pattern of a laptop at about a third of its CPU that is smooth in OBS and
+laggy here, and better at 720p. On the PC this was built on FFmpeg decodes a 1080p frame in about
+7 ms and makes it BGR in about 2 ms. Two more things keep it from adding delay of its own: a thread
+does nothing but take frames off FFmpeg's queue and keep the newest, so a frame that is already old is
+never decoded at all; and the card is read in FFmpeg's non-blocking mode, because FFmpeg's DirectShow
+read otherwise waits forever on a card that goes quiet. FFmpeg also knows the card's name, which
+appears in the card list. If FFmpeg will not open a card, the same card is opened through OpenCV's
+DirectShow, so 0.4.4 is never worse off than 0.4.3.
+
+OpenCV's DirectShow path keeps only the newest frame, with no
 queue to fall behind in. What makes it crawl is the format. A USB 2.0 card has to send 1080p as MJPG;
 uncompressed YUY2 at 1080p is about five frames a second. And in OpenCV's DirectShow code the order
 the settings are given in decides which one you get: setting the size after the format quietly
@@ -291,9 +303,10 @@ at the cost of clipping when the window is smaller than the frame.
 
 ### Latency
 
-The capture thread drains whatever Media Foundation has queued and shows only the newest frame.
-`CAP_PROP_BUFFERSIZE = 1` is a request the back end may ignore, so the depth is measured rather
-than trusted: `grab()` returns instantly when a frame is already waiting and blocks for about a
+Through FFmpeg, only the newest frame the card has sent is ever decoded; the ones it replaced are
+counted as skipped. Through Media Foundation, the capture thread drains whatever has queued and
+shows only the newest frame. `CAP_PROP_BUFFERSIZE = 1` is a request the back end may ignore, so the
+depth is measured rather than trusted: `grab()` returns instantly when a frame is already waiting and blocks for about a
 frame interval once caught up, and that difference is what the loop reads.
 
 The status bar shows **device to painted** in milliseconds, plus how many queued frames were
@@ -518,7 +531,8 @@ capturekvm/
 ├── windows/smoke.ps1        start the built exe in each mode and look for a window
 ├── windows/capturekvm/
 │   ├── launcher.py          ← which end is this machine, and run that half
-│   ├── capture.py           UVC capture through Media Foundation
+│   ├── capture.py           finding the card, its format, and the capture loop
+│   ├── ffcapture.py         ← reading the card as OBS does: DirectShow frames, FFmpeg decoding
 │   ├── link.py              the Beamer initiator
 │   ├── pair.py              the "pair by address" exchange
 │   ├── inputmap.py          Qt events to wire key names

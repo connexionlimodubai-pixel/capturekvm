@@ -15,6 +15,7 @@ import json
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -26,7 +27,7 @@ sys.path.insert(0, str(ROOT / "windows"))
 
 import numpy as np  # noqa: E402
 
-from capturekvm import capture, clipboard, discover, launcher, padwire, process, store  # noqa: E402
+from capturekvm import capture, clipboard, discover, ffcapture, launcher, padwire, process, store  # noqa: E402
 from core import pairing  # noqa: E402
 
 
@@ -318,6 +319,20 @@ class RememberedMode(unittest.TestCase):
     def test_unset_means_ask(self):
         self.assertEqual(self.store.mode, "")
 
+    def test_a_directshow_chosen_before_ffmpeg_existed_moves_to_auto_once(self):
+        self.store.set_setting("capture_api", "dshow")
+        self.assertTrue(store.Store(self.file).adopt_ffmpeg())
+        again = store.Store(self.file)
+        self.assertEqual(again.setting("capture_api"), "auto")
+        again.set_setting("capture_api", "dshow")          # chosen now, knowing FFmpeg is there
+        self.assertFalse(store.Store(self.file).adopt_ffmpeg())
+        self.assertEqual(store.Store(self.file).setting("capture_api"), "dshow")
+
+    def test_other_choices_are_left_alone(self):
+        self.store.set_setting("capture_api", "msmf")
+        self.assertFalse(self.store.adopt_ffmpeg())
+        self.assertEqual(self.store.setting("capture_api"), "msmf")
+
     def test_a_mode_survives_a_reload(self):
         self.store.mode = "host"
         self.assertEqual(store.Store(self.file).mode, "host")
@@ -376,6 +391,7 @@ class RememberedMode(unittest.TestCase):
 
 DSHOW = capture.cv2.CAP_DSHOW
 MSMF = capture.cv2.CAP_MSMF
+FFMPEG = capture.FFMPEG
 
 
 class FakeCamera:
@@ -430,7 +446,8 @@ class CardDiscovery(unittest.TestCase):
     def look(self, world, **kwargs):
         FakeCamera.world = world
         FakeCamera.asked = []
-        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera), \
+                unittest.mock.patch.object(capture.ffcapture, "list_video_devices", lambda: []):
             return capture.list_devices(**kwargs)
 
     def test_a_card_media_foundation_will_not_open_is_found_through_directshow(self):
@@ -465,7 +482,8 @@ class CardDiscovery(unittest.TestCase):
 
     def negotiate(self, world, api):
         FakeCamera.world = world
-        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera):
+        with unittest.mock.patch.object(capture.cv2, "VideoCapture", FakeCamera), \
+                unittest.mock.patch.object(capture.ffcapture, "list_video_devices", lambda: []):
             return capture.negotiate(1, ("MJPG", 1920, 1080, 30), api)
 
     def test_starting_a_card_keeps_to_the_api_it_was_found_through(self):
@@ -621,8 +639,361 @@ class DirectShowFormatOrder(unittest.TestCase):
     def test_the_api_choice_narrows_the_search(self):
         self.assertEqual([api for _, api in capture.backends_for("dshow")], [DSHOW])
         self.assertEqual([api for _, api in capture.backends_for("msmf")], [MSMF])
-        self.assertEqual([api for _, api in capture.backends_for("auto")], [DSHOW, MSMF])
+        self.assertEqual([api for _, api in capture.backends_for("ffmpeg")], [FFMPEG])
+        self.assertEqual([api for _, api in capture.backends_for("auto")], [FFMPEG, DSHOW, MSMF])
         self.assertEqual(capture.backends_for("something old"), capture.BACKENDS)
+
+
+class FFmpegDeviceList(unittest.TestCase):
+    """FFmpeg names the cards; these are the exact pieces libavdevice/dshow.c prints them in."""
+
+    @staticmethod
+    def printed(*devices):
+        # dshow.c, listing devices: the name, " (" and the media types, ")", a newline, then the
+        # alternative name on a line of its own -- five separate av_log calls per device.
+        pieces = []
+        for name, kinds, unique in devices:
+            pieces.append('"%s"' % name)
+            pieces.extend([" (%s" % kinds[0]] + [", %s" % kind for kind in kinds[1:]] + [")"]
+                          if kinds else [" (none)"])
+            pieces.append("\n")
+            pieces.append('  Alternative name "%s"\n' % unique)
+        return "".join(pieces)
+
+    def test_video_devices_come_out_in_order_with_their_unique_names(self):
+        text = self.printed(("USB3.0 Capture", ["video"], "@device_pnp_\\\\?\\usb#vid_345f&pid_2130#a"),
+                            ("Integrated Camera", ["video"], "@device_pnp_\\\\?\\usb#vid_04f2#b"),
+                            ("Microphone (USB3.0 Capture)", ["audio"], "@device_cm_{33D9}\\wave_{1}"))
+        found = ffcapture.parse_device_list(text)
+        self.assertEqual([device["name"] for device in found], ["USB3.0 Capture", "Integrated Camera"])
+        self.assertTrue(found[0]["id"].startswith("@device_pnp_"), "opened by the name that is unique")
+
+    def test_two_cards_with_one_name_stay_two_cards(self):
+        text = self.printed(("USB Video", ["video"], "@device_pnp_one"), ("USB Video", ["video"], "@device_pnp_two"))
+        self.assertEqual([device["id"] for device in ffcapture.parse_device_list(text)],
+                         ["@device_pnp_one", "@device_pnp_two"])
+
+    def test_a_device_with_video_among_other_media_counts(self):
+        text = self.printed(("Cam Link", ["audio", "video"], "@x"), ("Dead thing", [], "@y"))
+        self.assertEqual([device["name"] for device in ffcapture.parse_device_list(text)], ["Cam Link"])
+
+    def test_this_pc_can_be_asked_without_failing(self):
+        # A real call into FFmpeg: whatever this PC has, listing returns a list and never raises.
+        self.assertIsInstance(ffcapture.list_video_devices(), list)
+
+
+class FakePacket:
+    def __init__(self, number, size=1000):
+        self.number, self.size = number, size
+
+
+class FakeFrame:
+    width, height = 4, 2
+
+    def __init__(self, number):
+        self.number = number
+
+    def to_ndarray(self, format):
+        assert format == "bgr24"
+        return np.full((self.height, self.width, 3), self.number % 256, np.uint8)
+
+
+class FakeCodec:
+    name, pix_fmt, width, height, thread_type = "mjpeg", "yuvj422p", 1920, 1080, "FRAME"
+
+    def __init__(self):
+        self.decoded = []
+
+    def decode(self, packet):
+        self.decoded.append(packet.number)
+        return [FakeFrame(packet.number)]
+
+
+class FakeStream:
+    average_rate = base_rate = guessed_rate = 30
+
+    def __init__(self):
+        self.codec_context = FakeCodec()
+
+
+class FakeDshowInput:
+    """FFmpeg's DirectShow input in non-blocking mode, as dshow_read_packet behaves: it hands over
+    what the card has sent and raises EAGAIN, at once, when nothing is waiting. `unplug` makes the
+    next read fail the way a removed device does."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.arrived = []
+        self.reading = 0
+        self.closed = False
+        self.closed_while_reading = False
+        self.unplugged = False
+        self.flags = 0
+
+    def deliver(self, *numbers, size=1000):
+        with self.lock:
+            self.arrived.extend(FakePacket(number, size) for number in numbers)
+
+    def demux(self, stream):
+        import av
+        self.reading += 1
+        try:
+            while True:
+                with self.lock:
+                    if self.closed:
+                        raise AssertionError("read after close")
+                    if self.unplugged:
+                        raise OSError(5, "I/O error")
+                    packet = self.arrived.pop(0) if self.arrived else None
+                if packet is None:
+                    raise av.error.BlockingIOError(11, "Resource temporarily unavailable")
+                yield packet
+        finally:
+            self.reading -= 1
+
+    def close(self):
+        self.closed_while_reading = self.reading > 0
+        self.closed = True
+
+
+def wait_until(condition, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting")
+        time.sleep(0.002)
+
+
+class FFmpegNewestFrameOnly(unittest.TestCase):
+    """The point of the FFmpeg path: a frame that is already old is never decoded or shown, and
+    nothing in it can wait forever or close under a thread that is still reading."""
+
+    def feed(self):
+        source = FakeDshowInput()
+        feed = ffcapture.FFmpegFeed(source, FakeStream())
+        self.addCleanup(feed.release)
+        return source, feed
+
+    def test_only_the_newest_of_queued_frames_is_decoded(self):
+        source, feed = self.feed()
+        source.deliver(1, 2, 3, 4, 5)
+        wait_until(lambda: feed.skipped == 4)
+        ok, frame = feed.read()
+        self.assertTrue(ok)
+        self.assertEqual(int(frame[0, 0, 0]), 5)
+        self.assertEqual(feed._codec.decoded, [5], "frames 1-4 were never decoded")
+        self.assertEqual(feed.take_skipped(), 4)
+        self.assertEqual(feed.take_skipped(), 0, "and the count starts again")
+
+    def test_a_frame_is_shown_once(self):
+        source, feed = self.feed()
+        source.deliver(7)
+        self.assertTrue(feed.read()[0])
+        self.assertEqual(feed.read(timeout=0.05), (False, None), "nothing new: no frame, not the old one")
+
+    def test_a_quiet_card_times_out_instead_of_hanging(self):
+        _, feed = self.feed()
+        started = time.monotonic()
+        self.assertEqual(feed.read(timeout=0.1), (False, None))
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_an_unplugged_card_fails_at_once(self):
+        source, feed = self.feed()
+        source.unplugged = True
+        wait_until(lambda: feed.failed is not None)
+        started = time.monotonic()
+        self.assertEqual(feed.read(timeout=5), (False, None))
+        self.assertLess(time.monotonic() - started, 1.0, "a dead feed does not wait out the timeout")
+        self.assertFalse(feed.isOpened())
+
+    def test_end_of_stream_markers_are_not_frames(self):
+        source, feed = self.feed()
+        source.deliver(1, size=0)
+        source.deliver(2)
+        ok, frame = feed.read()
+        self.assertEqual(int(frame[0, 0, 0]), 2)
+        self.assertEqual(feed._codec.decoded, [2])
+
+    def test_release_stops_the_reader_before_closing(self):
+        source, feed = self.feed()
+        source.deliver(1)
+        wait_until(lambda: feed._latest is not None)
+        feed.release()
+        self.assertTrue(source.closed)
+        self.assertFalse(source.closed_while_reading)
+        self.assertFalse(feed._reader.is_alive())
+
+    def test_frames_are_decoded_one_in_one_out(self):
+        _, feed = self.feed()
+        self.assertEqual(feed._codec.thread_type, "SLICE", "frame threads would hand back old frames")
+
+    def test_it_reports_itself_as_opencv_would(self):
+        _, feed = self.feed()
+        cv2 = capture.cv2
+        self.assertEqual(capture.fourcc_text(feed.get(cv2.CAP_PROP_FOURCC)), "MJPG")
+        self.assertEqual((feed.get(cv2.CAP_PROP_FRAME_WIDTH), feed.get(cv2.CAP_PROP_FRAME_HEIGHT)), (1920, 1080))
+        self.assertEqual(feed.get(cv2.CAP_PROP_FPS), 30.0)
+
+
+class FFmpegRealDecode(unittest.TestCase):
+    """The same feed over a real FFmpeg demuxer and decoder: MJPG made here, read back as BGR."""
+
+    def recording(self):
+        """A few MJPG frames, blue on the left and red on the right, in a file FFmpeg can read."""
+        import av
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = folder / "card.avi"
+        picture = np.zeros((48, 64, 3), np.uint8)
+        picture[:, :32] = (255, 0, 0)          # BGR: blue on the left
+        picture[:, 32:] = (0, 0, 255)          # red on the right
+        with av.open(str(path), "w") as out:
+            stream = out.add_stream("mjpeg", rate=30)
+            stream.width, stream.height, stream.pix_fmt = 64, 48, "yuvj420p"
+            for _ in range(6):
+                frame = av.VideoFrame.from_ndarray(picture, format="bgr24").reformat(format="yuvj420p")
+                for packet in stream.encode(frame):
+                    out.mux(packet)
+            for packet in stream.encode(None):
+                out.mux(packet)
+        return path
+
+    def test_open_asks_directshow_for_the_format_and_reads_without_blocking(self):
+        # FFmpegFeed.open, all of it, with only av.open pointed at the file instead of a card.
+        # Setting the non-blocking flag the obvious way (`flags |= Flags.non_block`) raises in
+        # PyAV 19, and open() read that as "no video stream": no card would ever have opened.
+        import av
+        path, calls, real_open = self.recording(), [], av.open
+
+        def card(url, format=None, options=None):
+            calls.append((url, format, dict(options or {})))
+            return real_open(str(path))
+
+        with unittest.mock.patch.object(av, "open", card):
+            feed = ffcapture.FFmpegFeed.open("@device_pnp_card", 1920, 1080, 30)
+        self.assertIsNotNone(feed)
+        self.addCleanup(feed.release)
+        self.assertEqual(calls, [("video=@device_pnp_card", "dshow",
+                                  {"video_size": "1920x1080", "framerate": "30",
+                                   "rtbufsize": ffcapture.RTBUFSIZE})])
+        self.assertTrue(feed._container.flags & av.container.Flags.non_block.value)
+        self.assertTrue(feed.read()[0])
+
+    def test_mjpg_frames_come_back_as_bgr(self):
+        import av
+        container = av.open(str(self.recording()))
+        container.flags = int(container.flags) | int(av.container.Flags.non_block.value)
+        feed = ffcapture.FFmpegFeed(container, container.streams.video[0])
+        try:
+            ok, frame = feed.read()
+            self.assertTrue(ok)
+            self.assertEqual(frame.shape, (48, 64, 3))
+            self.assertGreater(int(frame[24, 8, 0]), 200, "blue stayed blue")
+            self.assertGreater(int(frame[24, 56, 2]), 200, "red stayed red")
+            self.assertEqual(feed.fourcc, "MJPG")
+            wait_until(lambda: feed.failed is not None)    # the file ends: the card "stops sending"
+        finally:
+            feed.release()
+
+
+class FakeFeed:
+    """ffcapture.FFmpegFeed as capture.py sees it. `accepts(device_id, width, height, fps)`
+    decides which opens succeed; every attempt is kept in `opened`."""
+
+    opened = []
+    accepts = staticmethod(lambda device_id, width, height, fps: True)
+
+    def __init__(self, device_id, width, height):
+        self.device_id = device_id
+        self.width, self.height = width or 1280, height or 720
+        self.released = False
+        self.fourcc = "MJPG"
+
+    @classmethod
+    def open(cls, device_id, width=None, height=None, fps=None, pixel_format=None):
+        cls.opened.append((device_id, width, height, fps, pixel_format))
+        return cls(device_id, width, height) if cls.accepts(device_id, width, height, fps) else None
+
+    def read(self, timeout=1.0):
+        return True, np.zeros((2, 2, 3), np.uint8)
+
+    def take_skipped(self):
+        return 1
+
+    def get(self, prop):
+        cv2 = capture.cv2
+        return {cv2.CAP_PROP_FRAME_WIDTH: self.width, cv2.CAP_PROP_FRAME_HEIGHT: self.height,
+                cv2.CAP_PROP_FPS: 30.0}.get(prop, 0)
+
+    def release(self):
+        self.released = True
+
+
+CARDS = [{"name": "USB3.0 Capture", "id": "@device_pnp_card"}, {"name": "Integrated Camera", "id": "@device_pnp_cam"}]
+
+
+class FFmpegFirst(unittest.TestCase):
+    """FFmpeg is tried before OpenCV, and OpenCV's DirectShow is still there when it fails."""
+
+    def setUp(self):
+        FakeFeed.opened = []
+        FakeFeed.accepts = staticmethod(lambda device_id, width, height, fps: True)
+        FakeCamera.asked = []
+        for target, value in ((capture.ffcapture, ("list_video_devices", lambda: list(CARDS))),
+                              (capture.ffcapture, ("FFmpegFeed", FakeFeed)),
+                              (capture.cv2, ("VideoCapture", FakeCamera))):
+            patcher = unittest.mock.patch.object(target, *value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_card_ffmpeg_reads_is_listed_through_ffmpeg_by_name(self):
+        FakeCamera.world = {(0, DSHOW): "reads", (1, DSHOW): "reads"}
+        found = capture.list_devices()
+        self.assertEqual([(d["index"], d["backend"], d["name"]) for d in found],
+                         [(0, "FFmpeg", "USB3.0 Capture"), (1, "FFmpeg", "Integrated Camera")])
+        self.assertFalse([key for key in FakeCamera.asked if key[0] in (0, 1)], "OpenCV was not needed")
+
+    def test_a_card_ffmpeg_cannot_open_is_found_through_directshow(self):
+        FakeFeed.accepts = staticmethod(lambda device_id, width, height, fps: device_id != "@device_pnp_card")
+        FakeCamera.world = {(0, DSHOW): "reads"}
+        found = capture.list_devices()
+        self.assertEqual([(d["index"], d["backend"]) for d in found], [(0, "DirectShow"), (1, "FFmpeg")])
+
+    def test_ffmpeg_is_asked_for_the_size_and_rate_and_nothing_older_is_tried_first(self):
+        feed, actual = capture.negotiate(0, ("MJPG", 1920, 1080, 30), FFMPEG)
+        self.assertEqual(FakeFeed.opened, [("@device_pnp_card", 1920, 1080, 30, None)])
+        self.assertEqual((actual["backend"], actual["api"], actual["fourcc"], actual["name"]),
+                         ("FFmpeg", FFMPEG, "MJPG", "USB3.0 Capture"))
+        self.assertEqual(actual["asked"]["fps"], 30)
+
+    def test_the_ladder_goes_on_inside_ffmpeg(self):
+        FakeFeed.accepts = staticmethod(lambda device_id, width, height, fps: (width, fps) == (1280, 60))
+        feed, actual = capture.negotiate(0, ("MJPG", 1920, 1080, 60), FFMPEG)
+        self.assertEqual((actual["backend"], actual["width"]), ("FFmpeg", 1280))
+        self.assertEqual([attempt[1:4] for attempt in FakeFeed.opened],
+                         [(1920, 1080, 60), (1920, 1080, 30), (1280, 720, 60)])
+
+    def test_raw_rungs_name_their_pixel_format(self):
+        FakeFeed.accepts = staticmethod(lambda device_id, width, height, fps: width == 640)
+        capture.negotiate(0, ("MJPG", 1920, 1080, 30), FFMPEG)
+        self.assertEqual(FakeFeed.opened[-1], ("@device_pnp_card", 640, 480, 30, "yuyv422"))
+
+    def test_a_card_ffmpeg_will_not_open_falls_back_to_directshow_at_the_same_index(self):
+        FakeFeed.accepts = staticmethod(lambda device_id, width, height, fps: False)
+        FakeCamera.world = {(0, DSHOW): "reads", (0, MSMF): "reads"}
+        feed, actual = capture.negotiate(0, ("MJPG", 1920, 1080, 30), FFMPEG)
+        self.assertEqual((actual["backend"], actual["api"]), ("DirectShow", DSHOW))
+        self.assertNotIn((0, MSMF), FakeCamera.asked, "the other numbering is still not guessed at")
+
+    def test_the_capture_loop_reads_ffmpeg_without_draining_and_counts_its_skips(self):
+        worker = capture.CaptureWorker(lambda frame, at=None: None)
+        worker.start(0, "MJPG", 1920, 1080, 30, FFMPEG)
+        wait_until(lambda: worker.frames >= 10)
+        opened_as = worker.format
+        worker.stop()
+        self.assertFalse(worker._draining)
+        self.assertEqual(opened_as["backend"], "FFmpeg")
+        self.assertGreaterEqual(worker.dropped_stale, 10, "the feed's own skip count is reported")
 
 
 class Draining(unittest.TestCase):

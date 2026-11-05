@@ -6,8 +6,13 @@ PySide6-Essentials>=6.11.1
 # this is the same dependency upstream has.
 PyNaCl>=1.5
 
-# UVC capture through Media Foundation. The MSMF back end opens a capture card by index.
-# Headless because the GUI module (imshow and friends) is unused here and brings a second copy of
+# Reads the capture card the way OBS does: FFmpeg's DirectShow input for the frames, FFmpeg's own
+# MJPEG decoder for the picture (capturekvm/ffcapture.py). BSD-3; the wheel carries FFmpeg's DLLs,
+# see NOTICE.md. 19.0.2 is the version the container-flag handling was checked against.
+av>=19.0.2
+
+# The fallback capture paths, OpenCV's DirectShow and Media Foundation back ends, and the frame
+# conversion the window uses. Headless because the GUI module (imshow and friends) is unused here and brings a second copy of
 # Qt alongside PySide6's -- two Qt runtimes in one process is a fight worth avoiding, and it is
 # about 20 MB of a packaged build.
 opencv-python-headless>=4.10
